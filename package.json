@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3101",
     "build": "next build",
     "start": "next start -H 0.0.0.0",
     "lint": "eslint",
-    "dev:demo": "DB_PATH=data/demo.db next dev",
+    "dev:demo": "DB_PATH=data/demo.db next dev -p 3101",
     "seed:demo": "node scripts/seed-demo.mts",
     "typecheck": "tsc --noEmit",
     "start:public": "COOKIE_SECURE=true next start -H 127.0.0.1 -p 3000",

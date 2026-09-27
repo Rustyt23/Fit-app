@@ -271,14 +271,15 @@ export async function saveFamilyName(_: FormState, fd: FormData): Promise<FormSt
 
 type TaskSettings = Pick<
   Task,
-  "kind" | "title" | "details" | "time" | "days" | "weight" | "any_time" | "per_week" | "per_month" | "custom_type" | "custom_emoji" | "coins" | "penalty"
+  "kind" | "title" | "details" | "time" | "days" | "weight" | "any_time" | "per_week" | "per_month" | "repeat_every_days" | "month_days" | "custom_type" | "custom_emoji" | "coins" | "penalty"
 >;
 
 function insertTask(memberId: number, v: TaskSettings, start: string) {
   return sql(
-    `INSERT INTO tasks (member_id, kind, title, details, time, days, weight, any_time, per_week, per_month, custom_type, custom_emoji, coins, penalty, start_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    memberId, v.kind, v.title, v.details, v.time, v.days, v.weight, v.any_time, v.per_week, v.per_month, v.custom_type, v.custom_emoji, v.coins, v.penalty, start,
+    `INSERT INTO tasks (member_id, kind, title, details, time, days, weight, any_time, per_week, per_month, repeat_every_days, month_days, custom_type, custom_emoji, coins, penalty, start_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    memberId, v.kind, v.title, v.details, v.time, v.days, v.weight, v.any_time, v.per_week, v.per_month, v.repeat_every_days, v.month_days,
+    v.custom_type, v.custom_emoji, v.coins, v.penalty, start,
   );
 }
 
@@ -333,8 +334,12 @@ export async function saveTask(_: FormState, fd: FormData): Promise<FormState> {
   const daysMode = String(fd.get("days_mode") ?? "days");
   const perWeek = daysMode === "weekly" ? Math.round(Number(fd.get("per_week"))) : null;
   const perMonth = daysMode === "monthly" ? Math.round(Number(fd.get("per_month"))) : null;
+  const repeatEveryDays = daysMode === "interval" ? Math.round(Number(fd.get("repeat_every_days"))) : null;
+  const monthDays = daysMode === "month_dates"
+    ? [...new Set(fd.getAll("month_days").map(Number))].filter((day) => Number.isInteger(day) && day >= 1 && day <= 31).sort((a, b) => a - b).join(",")
+    : null;
   const days =
-    perWeek || perMonth ? "0123456" : [...new Set(fd.getAll("days").map(String))].filter((d) => /^[0-6]$/.test(d)).sort().join("");
+    perWeek || perMonth || repeatEveryDays || monthDays ? "0123456" : [...new Set(fd.getAll("days").map(String))].filter((d) => /^[0-6]$/.test(d)).sort().join("");
   // "Your own" types carry their own name and emoji.
   const customType = kind === "other" ? str(fd, "custom_type", 30) : null;
   const customEmoji = kind === "other" ? str(fd, "custom_emoji", 8) || "✨" : null;
@@ -349,6 +354,8 @@ export async function saveTask(_: FormState, fd: FormData): Promise<FormState> {
   if (kind === "other" && !customType) return fail("Give your own type a name, e.g. Meditation or Water.");
   if (daysMode === "weekly" && !(perWeek! >= 1 && perWeek! <= 6)) return fail("Pick how many times a week (1 to 6).");
   if (daysMode === "monthly" && !(perMonth! >= 1 && perMonth! <= 4)) return fail("Pick how many times a month (1 to 4).");
+  if (daysMode === "interval" && !(repeatEveryDays! >= 1 && repeatEveryDays! <= 365)) return fail("Choose an interval from 1 to 365 days.");
+  if (daysMode === "month_dates" && !monthDays) return fail("Pick at least one date of the month.");
   if (!days) return fail("Pick at least one day.");
   if (!(weight >= 1 && weight <= 3)) return fail("Importance must be normal, high or top.");
   if (coins !== null && !(Number.isInteger(coins) && coins >= 0 && coins <= MAX_COINS_PER_RULE)) {
@@ -368,6 +375,8 @@ export async function saveTask(_: FormState, fd: FormData): Promise<FormState> {
     any_time: anyTime,
     per_week: perWeek,
     per_month: perMonth,
+    repeat_every_days: repeatEveryDays,
+    month_days: monthDays,
     custom_type: customType,
     custom_emoji: customEmoji,
     coins,
@@ -390,6 +399,8 @@ export async function saveTask(_: FormState, fd: FormData): Promise<FormState> {
     task.any_time !== anyTime ||
     task.per_week !== perWeek ||
     task.per_month !== perMonth ||
+    task.repeat_every_days !== repeatEveryDays ||
+    task.month_days !== monthDays ||
     task.coins !== coins ||
     task.penalty !== penalty ||
     (task.time !== time && !anyTime);
@@ -405,8 +416,8 @@ export async function saveTask(_: FormState, fd: FormData): Promise<FormState> {
   } else {
     await run(
       `UPDATE tasks SET kind = ?, title = ?, details = ?, time = ?, days = ?, weight = ?, any_time = ?, per_week = ?, per_month = ?,
-       custom_type = ?, custom_emoji = ?, coins = ?, penalty = ? WHERE id = ?`,
-      kind, title, details, time, days, weight, anyTime, perWeek, perMonth, customType, customEmoji, coins, penalty, id,
+       repeat_every_days = ?, month_days = ?, custom_type = ?, custom_emoji = ?, coins = ?, penalty = ? WHERE id = ?`,
+      kind, title, details, time, days, weight, anyTime, perWeek, perMonth, repeatEveryDays, monthDays, customType, customEmoji, coins, penalty, id,
     );
   }
   await audit(admin.id, `Updated ${member.name}'s "${title}"`);

@@ -81,6 +81,8 @@ export default function TaskFields({
         days={values.days}
         perWeek={values.per_week}
         perMonth={values.per_month}
+        repeatEveryDays={values.repeat_every_days}
+        monthDays={values.month_days}
       />
 
       <div className="grid grid-cols-2 gap-3">
@@ -174,9 +176,35 @@ export const IMPORTANCE = [
 const times = (n: number) => (n === 1 ? "Once" : n === 2 ? "Twice" : `${n}×`);
 
 /** "Any time · Twice a month" / "7:00 AM · Weekdays" */
-export function scheduleLabel(t: Pick<Task, "any_time" | "time" | "per_week" | "per_month" | "days">): string {
-  const often = t.per_week ? `${times(t.per_week)} a week` : t.per_month ? `${times(t.per_month)} a month` : daysLabel(t.days);
+export function scheduleLabel(t: Pick<Task, "any_time" | "time" | "per_week" | "per_month" | "repeat_every_days" | "month_days" | "days">): string {
+  const often = t.per_week
+    ? `${times(t.per_week)} a week`
+    : t.per_month
+      ? `${times(t.per_month)} a month`
+      : t.repeat_every_days
+        ? intervalLabel(t.repeat_every_days)
+        : t.month_days
+          ? `${monthDaysLabel(t.month_days)} each month`
+          : daysLabel(t.days);
   return `${t.any_time ? "Any time" : formatTime(t.time)} · ${often}`;
+}
+
+export function intervalLabel(days: number): string {
+  if (days === 1) return "Every day";
+  if (days === 2) return "Every other day";
+  if (days === 7) return "Every week";
+  return `Every ${days} days`;
+}
+
+const ordinal = (day: number) => {
+  const mod100 = day % 100;
+  const suffix = mod100 >= 11 && mod100 <= 13 ? "th" : day % 10 === 1 ? "st" : day % 10 === 2 ? "nd" : day % 10 === 3 ? "rd" : "th";
+  return `${day}${suffix}`;
+};
+
+export function monthDaysLabel(monthDays: string): string {
+  const labels = monthDays.split(",").filter(Boolean).map(Number).map(ordinal);
+  return labels.length > 1 ? `${labels.slice(0, -1).join(", ")} & ${labels.at(-1)}` : (labels[0] ?? "Monthly");
 }
 
 export function daysLabel(days: string): string {

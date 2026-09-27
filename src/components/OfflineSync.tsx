@@ -30,7 +30,20 @@ export default function OfflineSync({ memberId, lang }: { memberId: number; lang
 
   useEffect(() => {
     if ("serviceWorker" in navigator && window.isSecureContext) {
-      navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" }).catch(() => {});
+      const hadController = !!navigator.serviceWorker.controller;
+      let reloading = false;
+      const useNewestWorker = () => {
+        if (hadController && !reloading) {
+          reloading = true;
+          window.location.reload();
+        }
+      };
+      navigator.serviceWorker.addEventListener("controllerchange", useNewestWorker);
+      navigator.serviceWorker
+        .register("/sw.js", { scope: "/", updateViaCache: "none" })
+        .then((registration) => registration.update())
+        .catch(() => {});
+      return () => navigator.serviceWorker.removeEventListener("controllerchange", useNewestWorker);
     }
   }, []);
 

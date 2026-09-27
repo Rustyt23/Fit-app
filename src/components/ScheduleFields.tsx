@@ -23,14 +23,50 @@ type Props = {
   days?: string;
   perWeek?: number | null;
   perMonth?: number | null;
+  repeatEveryDays?: number | null;
+  monthDays?: string | null;
 };
 
 const COUNT_LABEL = (n: number) => (n === 1 ? "Once" : n === 2 ? "Twice" : `${n}×`);
 
-/** When and how often: a set time or any time of day; chosen weekdays or "N times a week". */
-export default function ScheduleFields({ uid, time, anyTime = false, days, perWeek, perMonth }: Props) {
+type DaysMode = "days" | "weekly" | "monthly" | "interval" | "month_dates";
+
+const ordinal = (day: number) => {
+  const mod100 = day % 100;
+  const suffix = mod100 >= 11 && mod100 <= 13 ? "th" : day % 10 === 1 ? "st" : day % 10 === 2 ? "nd" : day % 10 === 3 ? "rd" : "th";
+  return `${day}${suffix}`;
+};
+
+const customSummary = (mode: DaysMode, interval: number, monthDays: number[]) => {
+  if (mode === "interval") {
+    if (interval === 2) return "Every other day";
+    if (interval === 7) return "Every week";
+    return `Every ${interval} days`;
+  }
+  if (mode === "month_dates") {
+    const selected = monthDays.map(ordinal);
+    return selected.length
+      ? `${selected.length > 1 ? `${selected.slice(0, -1).join(", ")} & ${selected.at(-1)}` : selected[0]} each month`
+      : "Choose monthly dates";
+  }
+  return "Every 2, 3, 7 or 15 days · specific monthly dates";
+};
+
+/** Common schedules stay visible; calendar intervals and monthly dates live in a collapsible panel. */
+export default function ScheduleFields({ uid, time, anyTime = false, days, perWeek, perMonth, repeatEveryDays, monthDays }: Props) {
   const [timeMode, setTimeMode] = useState<"set" | "any">(anyTime ? "any" : "set");
-  const [daysMode, setDaysMode] = useState<"days" | "weekly" | "monthly">(perWeek ? "weekly" : perMonth ? "monthly" : "days");
+  const initialMode: DaysMode = repeatEveryDays ? "interval" : monthDays ? "month_dates" : perWeek ? "weekly" : perMonth ? "monthly" : "days";
+  const [daysMode, setDaysMode] = useState<DaysMode>(initialMode);
+  const [interval, setIntervalDays] = useState(repeatEveryDays ?? 2);
+  const [selectedMonthDays, setSelectedMonthDays] = useState<number[]>(
+    monthDays?.split(",").filter(Boolean).map(Number) ?? [],
+  );
+  const [advancedOpen, setAdvancedOpen] = useState(initialMode === "interval" || initialMode === "month_dates");
+
+  const chooseCommon = (mode: DaysMode) => {
+    setDaysMode(mode);
+    setAdvancedOpen(false);
+  };
 
   return (
     <div className="space-y-4">
@@ -72,7 +108,7 @@ export default function ScheduleFields({ uid, time, anyTime = false, days, perWe
             ] as const
           ).map(([mode, label]) => (
             <label key={mode} className={`${chip} py-2.5 text-sm`}>
-              <input type="radio" name="days_mode" value={mode} checked={daysMode === mode} onChange={() => setDaysMode(mode)} className="sr-only" />
+              <input type="radio" name="days_mode" value={mode} checked={daysMode === mode} onChange={() => chooseCommon(mode)} className="sr-only" />
               {label}
             </label>
           ))}
@@ -118,6 +154,111 @@ export default function ScheduleFields({ uid, time, anyTime = false, days, perWe
             </p>
           </div>
         )}
+
+        <details
+          className="group/schedule mt-2 rounded-2xl border border-line bg-white"
+          open={advancedOpen}
+          onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+        >
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-sm font-bold [&::-webkit-details-marker]:hidden">
+            <span aria-hidden>🗓️</span>
+            <span className="min-w-0 flex-1">
+              More schedules
+              <span className="block truncate text-xs font-semibold text-muted">
+                {customSummary(daysMode, interval, selectedMonthDays)}
+              </span>
+            </span>
+            <span className="text-muted transition-transform group-open/schedule:rotate-180">⌄</span>
+          </summary>
+
+          <div className="space-y-4 border-t border-line p-3">
+            <div className="grid grid-cols-2 gap-2">
+              <label className={`${chip} py-2.5 text-sm`}>
+                <input
+                  type="radio"
+                  name="days_mode"
+                  value="interval"
+                  checked={daysMode === "interval"}
+                  onChange={() => setDaysMode("interval")}
+                  className="sr-only"
+                />
+                🔁 Every N days
+              </label>
+              <label className={`${chip} py-2.5 text-sm`}>
+                <input
+                  type="radio"
+                  name="days_mode"
+                  value="month_dates"
+                  checked={daysMode === "month_dates"}
+                  onChange={() => setDaysMode("month_dates")}
+                  className="sr-only"
+                />
+                📆 Monthly dates
+              </label>
+            </div>
+
+            {daysMode === "interval" && (
+              <div>
+                <p className="mb-2 text-xs font-semibold text-muted">Repeat from the day this routine starts</p>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[2, 3, 7, 15].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setIntervalDays(n)}
+                      className={`h-11 rounded-xl border text-sm font-bold transition ${
+                        interval === n ? "border-brand bg-orange-50 text-brand-dark" : "border-line bg-white text-muted"
+                      }`}
+                    >
+                      {n === 2 ? "Other day" : n === 7 ? "Weekly" : `${n} days`}
+                    </button>
+                  ))}
+                </div>
+                <label className="mt-3 flex items-center gap-2 text-sm font-bold" htmlFor={`${uid}-interval`}>
+                  Every
+                  <input
+                    id={`${uid}-interval`}
+                    name="repeat_every_days"
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={interval}
+                    onChange={(event) => setIntervalDays(Number(event.target.value))}
+                    className="field w-24 text-center"
+                    required
+                  />
+                  days
+                </label>
+              </div>
+            )}
+
+            {daysMode === "month_dates" && (
+              <div>
+                <p className="mb-2 text-xs font-semibold text-muted">Pick one or more dates, such as the 1st and 16th</p>
+                <div className="grid grid-cols-7 gap-1.5">
+                  {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
+                    <label key={day} className={`${chip} aspect-square text-xs`}>
+                      <input
+                        type="checkbox"
+                        name="month_days"
+                        value={day}
+                        checked={selectedMonthDays.includes(day)}
+                        onChange={(event) =>
+                          setSelectedMonthDays((current) =>
+                            event.target.checked ? [...current, day].sort((a, b) => a - b) : current.filter((value) => value !== day),
+                          )
+                        }
+                        className="sr-only"
+                      />
+                      {day}
+                    </label>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-muted">Dates that don&apos;t exist in a shorter month are skipped.</p>
+              </div>
+            )}
+          </div>
+        </details>
       </fieldset>
     </div>
   );

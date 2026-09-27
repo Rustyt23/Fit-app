@@ -82,6 +82,11 @@ export function addDays(s: string, n: number): string {
   return toDateStr(d);
 }
 
+/** Whole calendar days from `from` to `to` (positive when `to` is later). */
+export function daysSince(from: string, to: string): number {
+  return Math.round((parseDate(to).getTime() - parseDate(from).getTime()) / 86_400_000);
+}
+
 export function weekday(s: string): number {
   return parseDate(s).getUTCDay();
 }

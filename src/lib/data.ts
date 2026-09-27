@@ -1,7 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { all, get } from "./db";
-import { addDays, daysBetween, minutes, nextMonth, startOfMonth, startOfWeek, today, weekday } from "./dates";
+import { addDays, daysBetween, daysSince, minutes, nextMonth, parseDate, startOfMonth, startOfWeek, today, weekday } from "./dates";
 import type { Kind } from "./kinds";
 import type { Lang } from "./i18n";
 
@@ -39,6 +39,10 @@ export type Task = {
   per_week: number | null;
   /** Set for "this many times a month, any days" items. */
   per_month: number | null;
+  /** Set for items repeating every N calendar days, anchored to start_date. */
+  repeat_every_days: number | null;
+  /** Comma-separated dates of the month, e.g. "1,16". */
+  month_days: string | null;
   /** For "Your own" types (kind 'other'): the type's name and emoji. */
   custom_type: string | null;
   custom_emoji: string | null;
@@ -92,11 +96,14 @@ export const activeMembers = cache(
 
 /** Whether the item is in force on `date` (so it can be ticked). Weekly-target items are open every day. */
 export function isScheduledOn(task: Task, date: string): boolean {
-  return (
-    task.start_date <= date &&
-    (task.end_date === null || date < task.end_date) &&
-    (!!task.per_week || !!task.per_month || task.days.includes(String(weekday(date))))
-  );
+  if (task.start_date > date || (task.end_date !== null && date >= task.end_date)) return false;
+  if (task.per_week || task.per_month) return true;
+  if (task.repeat_every_days) return daysSince(task.start_date, date) % task.repeat_every_days === 0;
+  if (task.month_days) {
+    const day = parseDate(date).getUTCDate();
+    return task.month_days.split(",").some((value) => Number(value) === day);
+  }
+  return task.days.includes(String(weekday(date)));
 }
 
 /** Tasks that are (or were) in effect at some point during [from, to]. */

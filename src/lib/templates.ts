@@ -3,7 +3,7 @@ import type { Task } from "./data";
 
 export type TaskValues = Pick<
   Task,
-  "kind" | "title" | "details" | "time" | "days" | "weight" | "any_time" | "per_week" | "per_month" | "custom_type" | "custom_emoji" | "coins" | "penalty"
+  "kind" | "title" | "details" | "time" | "days" | "weight" | "any_time" | "per_week" | "per_month" | "repeat_every_days" | "month_days" | "custom_type" | "custom_emoji" | "coins" | "penalty"
 >;
 
 const base = {
@@ -12,6 +12,8 @@ const base = {
   any_time: 0,
   per_week: null,
   per_month: null,
+  repeat_every_days: null,
+  month_days: null,
   custom_type: null,
   custom_emoji: null,
   // New items earn 2 coins when done and lose 1 when missed, unless changed.

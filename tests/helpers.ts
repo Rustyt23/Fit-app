@@ -41,6 +41,8 @@ export async function addTask(
     anyTime?: boolean;
     perWeek?: number;
     perMonth?: number;
+    repeatEveryDays?: number;
+    monthDays?: string;
     customType?: string;
     coins?: number;
     penalty?: number;
@@ -49,10 +51,11 @@ export async function addTask(
   const { run } = await db();
   return (
     await run(
-      `INSERT INTO tasks (member_id, kind, title, time, days, weight, any_time, per_week, per_month, custom_type, coins, penalty, start_date)
-       VALUES (?, ?, 'Task', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tasks (member_id, kind, title, time, days, weight, any_time, per_week, per_month, repeat_every_days, month_days, custom_type, coins, penalty, start_date)
+       VALUES (?, ?, 'Task', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       memberId, opts.kind ?? "exercise", opts.anyTime ? "" : (opts.time ?? "07:00"), opts.days ?? "0123456", opts.weight ?? 1,
-      opts.anyTime ? 1 : 0, opts.perWeek ?? null, opts.perMonth ?? null, opts.customType ?? null, opts.coins ?? null, opts.penalty ?? 0, opts.start,
+      opts.anyTime ? 1 : 0, opts.perWeek ?? null, opts.perMonth ?? null, opts.repeatEveryDays ?? null, opts.monthDays ?? null,
+      opts.customType ?? null, opts.coins ?? null, opts.penalty ?? 0, opts.start,
     )
   ).lastRowId;
 }
