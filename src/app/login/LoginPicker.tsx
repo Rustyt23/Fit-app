@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useState, useSyncExternalStore } from "react";
 import { login } from "@/app/actions";
 import type { Member } from "@/lib/data";
 import Avatar from "@/components/Avatar";
@@ -8,23 +8,34 @@ import { translator, type Lang } from "@/lib/i18n";
 
 const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "back", "0", "go"];
 
-export default function LoginPicker({ members, lang }: { members: Member[]; lang: Lang }) {
+const noop = () => () => {};
+/** False in the server's HTML and until this page's JavaScript is running; true after. */
+const useInteractive = () => useSyncExternalStore(noop, () => true, () => false);
+
+/**
+ * Pick your photo, then enter your PIN. Built so it still works if the page's JavaScript
+ * never starts (a slow phone, an out-of-date page): the photos are links, the PIN keypad
+ * sits in a real form, and there's a real PIN box the phone's own keyboard can fill.
+ */
+export default function LoginPicker({ members, lang, initialId }: { members: Member[]; lang: Lang; initialId?: number }) {
   const t = translator(lang);
-  const [picked, setPicked] = useState<Member | null>(members.length === 1 ? members[0] : null);
+  const [picked, setPicked] = useState<Member | null>(
+    members.find((m) => m.id === initialId) ?? (members.length === 1 ? members[0] : null),
+  );
   const [pin, setPin] = useState("");
-  const [state, action, pending] = useActionState(login, undefined);
+  const interactive = useInteractive();
+  // The server action itself (not a wrapper), so the form also works before/without JavaScript.
+  const [state, formAction, pending] = useActionState(login, undefined);
+  // A wrong PIN starts over (checked while rendering, when a new answer arrives).
+  const [answered, setAnswered] = useState(state);
+  if (state !== answered) {
+    setAnswered(state);
+    if (state?.error) setPin("");
+  }
 
   function press(key: string) {
     if (pending || !picked) return;
     if (key === "back") return setPin((p) => p.slice(0, -1));
-    if (key === "go") {
-      if (pin.length < 4) return;
-      const fd = new FormData();
-      fd.set("memberId", String(picked.id));
-      fd.set("pin", pin);
-      setPin(""); // cleared either way: success navigates away, a wrong PIN starts over
-      return startTransition(() => action(fd));
-    }
     setPin((p) => (p.length < 6 ? p + key : p));
   }
 
@@ -35,9 +46,10 @@ export default function LoginPicker({ members, lang }: { members: Member[]; lang
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (e.target instanceof HTMLInputElement) return; // typing in the PIN box itself
       if (/^\d$/.test(e.key)) press(e.key);
       else if (e.key === "Backspace") press("back");
-      else if (e.key === "Enter") press("go");
+      else if (e.key === "Enter" && pin.length >= 4) (document.getElementById("login-form") as HTMLFormElement | null)?.requestSubmit();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -47,33 +59,48 @@ export default function LoginPicker({ members, lang }: { members: Member[]; lang
     return (
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         {members.map((m) => (
-          <button
+          <a
             key={m.id}
-            onClick={() => setPicked(m)}
+            href={`/login?m=${m.id}`}
+            onClick={(e) => {
+              e.preventDefault();
+              setPicked(m);
+            }}
             className="card flex flex-col items-center gap-3 py-6 transition active:scale-95"
           >
             <Avatar member={m} size={88} />
             <span className="text-lg font-extrabold">{m.name}</span>
-          </button>
+          </a>
         ))}
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col items-center">
+    <form id="login-form" action={formAction} className="flex flex-col items-center">
+      <input type="hidden" name="memberId" value={picked.id} />
       <Avatar member={picked} size={104} />
       <p className="mt-3 text-xl font-extrabold">{t("login.hi", { name: picked.name })}</p>
-      <p className="text-muted">{t("login.enterPin")}</p>
+      <label htmlFor="pin" className="text-muted">
+        {t("login.enterPin")}
+      </label>
 
-      <div className="my-6 flex h-5 gap-3" aria-label={`${pin.length} digits entered`}>
-        {Array.from({ length: Math.max(4, pin.length) }).map((_, i) => (
-          <span
-            key={i}
-            className={`h-4 w-4 rounded-full transition ${i < pin.length ? "scale-110 bg-brand" : "bg-line"}`}
-          />
-        ))}
-      </div>
+      {/* The dots are the real PIN box: the keypad fills it, or tap it to use the phone's keyboard. */}
+      <input
+        id="pin"
+        name="pin"
+        type="password"
+        inputMode="numeric"
+        autoComplete="off"
+        pattern="\d{4,6}"
+        minLength={4}
+        maxLength={6}
+        required
+        value={pin}
+        onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
+        className="my-5 w-44 rounded-2xl border-2 border-line bg-white py-2 text-center text-3xl tracking-[0.5em] outline-none focus:border-brand"
+        aria-label={t("login.enterPin")}
+      />
 
       {state?.error && (
         <p role="alert" className="mb-4 rounded-xl bg-red-50 px-4 py-2 text-sm font-semibold text-red-700">
@@ -81,33 +108,55 @@ export default function LoginPicker({ members, lang }: { members: Member[]; lang
         </p>
       )}
 
-      <div className="grid w-full max-w-xs grid-cols-3 gap-3">
-        {KEYS.map((k) => (
-          <button
-            key={k}
-            onClick={() => press(k)}
-            disabled={pending || (k === "go" && pin.length < 4)}
-            className={`h-16 rounded-2xl text-2xl font-extrabold transition active:scale-95 disabled:opacity-40 ${
-              k === "go" ? "bg-brand text-white" : "bg-white shadow-sm"
-            }`}
-            aria-label={k === "back" ? t("login.delete") : k === "go" ? t("login.go") : k}
-          >
-            {k === "back" ? "⌫" : k === "go" ? (pending ? "…" : "→") : k}
+      {!interactive && (
+        <>
+          <p className="mb-3 text-sm font-bold text-muted">{t("login.typePin")}</p>
+          <button type="submit" className="h-14 w-full max-w-xs rounded-2xl bg-brand text-lg font-extrabold text-white">
+            {t("login.go")} →
           </button>
-        ))}
+        </>
+      )}
+
+      <div className={`grid w-full max-w-xs grid-cols-3 gap-3 ${interactive ? "" : "hidden"}`}>
+        {KEYS.map((k) =>
+          k === "go" ? (
+            <button
+              key={k}
+              type="submit"
+              disabled={pending}
+              className="h-16 rounded-2xl bg-brand text-2xl font-extrabold text-white transition active:scale-95 disabled:opacity-40"
+              aria-label={t("login.go")}
+            >
+              {pending ? "…" : "→"}
+            </button>
+          ) : (
+            <button
+              key={k}
+              type="button"
+              onClick={() => press(k)}
+              disabled={pending}
+              className="h-16 rounded-2xl bg-white text-2xl font-extrabold shadow-sm transition active:scale-95 disabled:opacity-40"
+              aria-label={k === "back" ? t("login.delete") : k}
+            >
+              {k === "back" ? "⌫" : k}
+            </button>
+          ),
+        )}
       </div>
 
       {members.length > 1 && (
-        <button
-          onClick={() => {
+        <a
+          href="/login"
+          onClick={(e) => {
+            e.preventDefault();
             setPicked(null);
             setPin("");
           }}
           className="mt-6 text-sm font-bold text-muted underline"
         >
           {t("login.notYou", { name: picked.name })}
-        </button>
+        </a>
       )}
-    </div>
+    </form>
   );
 }

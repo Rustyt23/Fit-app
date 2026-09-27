@@ -10,7 +10,7 @@ const BREAK_EMOJI = { sick: "🤒", travel: "✈️" } as const;
 
 /**
  * One compact card instead of two: the weekly challenge (theme, time left, your place)
- * and how everyone is doing today. Tapping it opens the full ranking.
+ * and how everyone is doing today. The top row opens the ranking; each photo opens that person's day.
  */
 export default function TodayGlance({
   event,
@@ -28,8 +28,8 @@ export default function TodayGlance({
   const t = translator(lang);
   const mine = eventRows.find((s) => s.member.id === meId);
   return (
-    <Link href="/leaderboard?range=week" className="card block p-0">
-      <div className="flex items-center gap-2 border-b border-line px-4 py-2.5 text-sm">
+    <div className="card block p-0">
+      <Link href="/leaderboard?range=week" className="flex items-center gap-2 border-b border-line px-4 py-2.5 text-sm">
         <span className="min-w-0 flex-1 truncate font-extrabold">
           {EVENTS.week.emoji} {THEME_EMOJI[event.theme]} {t(`theme.${event.theme}`)}
         </span>
@@ -40,11 +40,11 @@ export default function TodayGlance({
           <span className="shrink-0 rounded-full bg-stone-100 px-2 py-0.5 text-xs font-black">{t("event.you", { n: mine.rank })}</span>
         )}
         <span className="text-muted">›</span>
-      </div>
+      </Link>
       {board.length > 1 && (
         <div className="flex gap-4 overflow-x-auto px-4 py-3">
           {board.map((s) => (
-            <div key={s.member.id} className="flex w-14 shrink-0 flex-col items-center gap-1">
+            <Link key={s.member.id} href={`/member/${s.member.id}`} className="flex w-14 shrink-0 flex-col items-center gap-1">
               <div className="relative">
                 <ProgressRing percent={s.score ?? 0} size={52} stroke={4} color={s.member.color}>
                   <Avatar member={s.member} size={40} />
@@ -61,10 +61,11 @@ export default function TodayGlance({
               <span className="text-[11px] font-extrabold text-muted">
                 {s.away ? t("today.break") : s.score === null ? "–" : `${Math.round(s.score)}%`}
               </span>
-            </div>
+            </Link>
           ))}
         </div>
       )}
-    </Link>
+      {board.length > 1 && <p className="px-4 pb-2.5 text-[11px] font-bold text-muted">👆 {t("fam.tapHint")}</p>}
+    </div>
   );
 }

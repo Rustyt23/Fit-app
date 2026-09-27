@@ -105,3 +105,20 @@ body {
 .animate-pop {
   animation: pop 0.35s ease-out;
 }
+
+/* Next.js's developer "N" button (it only exists while running `next dev`, never in production)
+   would sit on top of the tab bar on phones, so it's only shown on the admin pages. */
+body:not(:has(.show-dev-tools)) nextjs-portal {
+  display: none;
+}
+/* On admin pages, move it to the middle of the right edge, clear of the tab bar. The portal
+   becomes a zero-size box there, and the transform makes it the button's positioning frame. */
+body:has(.show-dev-tools) nextjs-portal {
+  position: fixed;
+  top: calc(50% + 28px);
+  right: 0;
+  width: 0;
+  height: 0;
+  transform: translateZ(0);
+  z-index: 50;
+}

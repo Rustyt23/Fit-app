@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { LATE_TICK_UNTIL, canTick, lastFinalDay } from "@/lib/tick-window";
 import { ROTATION, resolveTheme } from "@/lib/themes";
 import { BADGE_TEXT, DICTIONARIES, translator } from "@/lib/i18n";
+import { ADMIN_DICTIONARIES, adminText } from "@/lib/i18n-admin";
 import { BADGES } from "@/lib/stats";
 import { cleanPrizes, cleanRules, DEFAULT_RULES, MAX_WEIGHT } from "@/lib/rules";
 
@@ -40,14 +41,33 @@ describe("admin rules are kept in range", () => {
     expect(r.weight_exercise).toBe(MAX_WEIGHT);
     expect(r.weight_medicine).toBe(1);
     expect(r.exercise_on_time).toBe(0);
-    expect(r.badge).toBe(DEFAULT_RULES.badge);
+    expect(r.badge_first_step).toBe(DEFAULT_RULES.badge_first_step);
     expect("hacker" in r).toBe(false);
+  });
+  it("gives every badge the old single 'other badges' amount from older saved rules", () => {
+    const r = cleanRules({ badge: 35, perfect_day: 7 });
+    expect([r.badge_first_step, r.badge_streak_7, r.badge_champion, r.perfect_day]).toEqual([35, 35, 35, 7]);
+    expect(cleanRules({ badge: 35, badge_century: 3 }).badge_century).toBe(3);
   });
   it("fills in missing prize places and trims text", () => {
     const p = cleanPrizes({ week: [{ coins: 10, prize: "  Movie  ", secret: true }] });
     expect(p.week[0]).toEqual({ coins: 10, prize: "Movie", secret: true });
     expect(p.week).toHaveLength(3);
     expect(p.month[0].prize).toBe("Gift package");
+  });
+});
+
+describe("admin screens in Hindi and English", () => {
+  const placeholders = (x: string) => [...x.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+  it("has every admin phrase in both languages, with the same {placeholders}", () => {
+    expect(Object.keys(ADMIN_DICTIONARIES.hi).sort()).toEqual(Object.keys(ADMIN_DICTIONARIES.en).sort());
+    for (const k of Object.keys(ADMIN_DICTIONARIES.en) as (keyof typeof ADMIN_DICTIONARIES.en)[]) {
+      expect(placeholders(ADMIN_DICTIONARIES.hi[k]), k).toEqual(placeholders(ADMIN_DICTIONARIES.en[k]));
+    }
+  });
+  it("switches with the admin's language", () => {
+    expect(adminText("hi")("admin.title")).toBe("एडमिन");
+    expect(adminText("en")("x.addedFor", { title: "Walk", names: "Mom and Neha" })).toBe('Added "Walk" for Mom and Neha.');
   });
 });
 

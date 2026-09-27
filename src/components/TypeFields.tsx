@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { KINDS, type Kind } from "@/lib/kinds";
+import type { Lang } from "@/lib/i18n";
+import { adminText } from "@/lib/i18n-admin";
 
 export type CustomType = { name: string; emoji: string };
 
@@ -17,6 +19,7 @@ export default function TypeFields({
   customType,
   customEmoji,
   existing = [],
+  lang = "en",
 }: {
   uid: string;
   kind: Kind;
@@ -24,20 +27,22 @@ export default function TypeFields({
   customEmoji?: string | null;
   /** Own types already used in the family, offered as quick picks. */
   existing?: CustomType[];
+  lang?: Lang;
 }) {
+  const t = adminText(lang);
   const [kind, setKind] = useState<Kind>(initialKind);
   const [name, setName] = useState(customType ?? "");
   const [emoji, setEmoji] = useState(customEmoji ?? "✨");
 
   return (
     <fieldset>
-      <legend className="label">Type</legend>
+      <legend className="label">{t("ty.type")}</legend>
       <div className="grid grid-cols-4 gap-2">
         {KINDS.map((k) => (
           <label key={k.value} className={`${chip} flex-col gap-0.5 py-2 text-xs`}>
             <input type="radio" name="kind" value={k.value} checked={kind === k.value} onChange={() => setKind(k.value)} className="sr-only" />
             <span className="text-2xl">{k.value === "other" && name ? emoji : k.emoji}</span>
-            {k.value === "other" && name ? name : k.label}
+            {k.value === "other" && name ? name : t(`ty.${k.value}`)}
           </label>
         ))}
       </div>
@@ -67,7 +72,7 @@ export default function TypeFields({
               value={emoji}
               onChange={(e) => setEmoji(e.target.value)}
               maxLength={8}
-              aria-label="Emoji"
+              aria-label={t("admin.emoji")}
               className="field px-2 text-center text-xl"
             />
             <input
@@ -77,8 +82,8 @@ export default function TypeFields({
               onChange={(e) => setName(e.target.value)}
               maxLength={30}
               required
-              placeholder="Name your type, e.g. Meditation, Water, Reading"
-              aria-label="Your own type"
+              placeholder={t("ty.namePlaceholder")}
+              aria-label={t("ty.other")}
               className="field"
             />
           </div>
@@ -95,7 +100,7 @@ export default function TypeFields({
               </button>
             ))}
           </div>
-          <p className="text-[11px] text-muted">Your own types count in the score and earn coins like the others (see Rules &amp; coins).</p>
+          <p className="text-[11px] text-muted">{t("ty.hint")}</p>
         </div>
       )}
     </fieldset>

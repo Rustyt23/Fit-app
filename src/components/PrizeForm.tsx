@@ -4,25 +4,28 @@ import { saveEventPrizes } from "@/app/actions";
 import ActionForm, { SubmitButton } from "./ActionForm";
 import Coin from "./Coin";
 import { THEMES, THEME_EMOJI, type ThemeSetting } from "@/lib/themes";
-import { translator } from "@/lib/i18n";
+import { translator, type Lang } from "@/lib/i18n";
+import { adminText } from "@/lib/i18n-admin";
 
 const MEDALS = ["🥇", "🥈", "🥉"];
 
 /** Admin form for one event's prizes: coins, a real-world prize, and whether to keep it a surprise. */
-export default function PrizeForm({ kind, prizes, theme }: { kind: EventKind; prizes: Prize[]; theme: ThemeSetting }) {
-  const t = translator("en");
+export default function PrizeForm({ kind, prizes, theme, lang = "en" }: { kind: EventKind; prizes: Prize[]; theme: ThemeSetting; lang?: Lang }) {
+  const t = translator(lang);
+  const a = adminText(lang);
+  const week = kind === "week";
   return (
     <ActionForm action={saveEventPrizes} className="space-y-3">
       <input type="hidden" name="event" value={kind} />
       <p className="text-sm font-black">
-        {EVENTS[kind].emoji} {EVENTS[kind].label}
+        {EVENTS[kind].emoji} {a(week ? "pf.weekly" : "pf.monthly")}
       </p>
       <div>
         <label className="label" htmlFor={`theme-${kind}`}>
-          Judged on
+          {a("pf.judged")}
         </label>
         <select id={`theme-${kind}`} name="theme" className="field" defaultValue={theme}>
-          <option value="rotate">🔄 Rotate automatically (a different theme each {EVENTS[kind].short})</option>
+          <option value="rotate">{a(week ? "pf.rotateWeek" : "pf.rotateMonth")}</option>
           {THEMES.map((th) => (
             <option key={th} value={th}>
               {THEME_EMOJI[th]} {t(`theme.${th}`)}: {t(`theme.${th}.how`).toLowerCase()}
@@ -41,7 +44,7 @@ export default function PrizeForm({ kind, prizes, theme }: { kind: EventKind; pr
                 min={0}
                 max={MAX_COINS_PER_RULE * 10}
                 defaultValue={p.coins}
-                aria-label={`Coins for place ${i + 1}`}
+                aria-label={a("pf.coinsFor", { n: i + 1 })}
                 className="field py-2 pl-8 pr-2 text-right font-black"
               />
               <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2">
@@ -52,19 +55,21 @@ export default function PrizeForm({ kind, prizes, theme }: { kind: EventKind; pr
               name={`prize_${i}`}
               defaultValue={p.prize}
               maxLength={80}
-              placeholder="Real prize (optional)"
-              aria-label={`Prize for place ${i + 1}`}
+              placeholder={a("pf.realPrize")}
+              aria-label={a("pf.prizeFor", { n: i + 1 })}
               className="field py-2 text-sm"
             />
           </div>
           <label className="mt-2 flex items-center gap-2 pl-10 text-xs font-bold text-muted">
             <input type="checkbox" name={`secret_${i}`} defaultChecked={p.secret} className="h-4 w-4 accent-brand" />
-            Keep the real prize a surprise until the {EVENTS[kind].short} ends
+            {a(week ? "pf.surpriseWeek" : "pf.surpriseMonth")}
           </label>
         </div>
       ))}
-      <p className="text-xs text-muted">Set coins to 0 and leave the prize empty to have no winner for that place.</p>
-      <SubmitButton className="btn-ghost w-full">Save {EVENTS[kind].short}ly prizes</SubmitButton>
+      <p className="text-xs text-muted">{a("pf.noWinner")}</p>
+      <SubmitButton className="btn-ghost w-full" pendingText={a("admin.saving")}>
+        {a(week ? "pf.saveWeek" : "pf.saveMonth")}
+      </SubmitButton>
     </ActionForm>
   );
 }

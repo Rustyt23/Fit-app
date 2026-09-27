@@ -63,3 +63,25 @@ export function clearTicksFor(taskId: number, date: string) {
   const list = load();
   if (list.some((p) => p.taskId === taskId && p.date === date)) save(list.filter((p) => !(p.taskId === taskId && p.date === date)));
 }
+
+/** True for "no connection" errors (fetch failing), as opposed to the server refusing or erroring. */
+export function isNetworkError(e: unknown): boolean {
+  return !navigator.onLine || (e instanceof TypeError && /fetch|network|load failed/i.test(e.message));
+}
+
+/**
+ * The page is out of date (e.g. the app was updated while it was open, so its buttons point at
+ * code that no longer exists). Reloads to get the new version, at most once a minute so a real
+ * server problem can't cause a reload loop. Queued ticks stay queued and are sent after the reload.
+ */
+export function reloadForNewVersion() {
+  const KEY_AT = "ff_reloaded_at";
+  try {
+    const last = Number(sessionStorage.getItem(KEY_AT) ?? 0);
+    if (Date.now() - last < 60_000) return;
+    sessionStorage.setItem(KEY_AT, String(Date.now()));
+  } catch {
+    // no storage: reload anyway
+  }
+  window.location.reload();
+}

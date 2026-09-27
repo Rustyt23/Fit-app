@@ -46,6 +46,10 @@ export function applyMigrations(db: Database, dir: string) {
 
 export function openSqlite(file: string, migrationsDir: string): Database {
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  const isNew = !fs.existsSync(file);
+  // Say which file is in use: starting with the wrong DB_PATH otherwise looks like "all data gone".
+  if (isNew) console.warn(`[family-fit] No database at ${file}: starting a NEW, EMPTY one. If you expected your family's data, set DB_PATH.`);
+  else console.info(`[family-fit] Database: ${file}`);
   const db = new (sqlite().DatabaseSync)(file);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
   applyMigrations(db, migrationsDir);

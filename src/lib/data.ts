@@ -1,7 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { all, get } from "./db";
-import { addDays, daysBetween, minutes, nextMonth, startOfMonth, startOfWeek, today, weekday } from "./dates";
+import { addDays, daysBetween, daysSince, minutes, nextMonth, parseDate, startOfMonth, startOfWeek, today, weekday } from "./dates";
 import type { Kind } from "./kinds";
 import type { Lang } from "./i18n";
 
@@ -19,6 +19,8 @@ export type Member = {
   default_pin: number;
   lang: Lang;
   text_size: "normal" | "large";
+  /** Set when an admin reset this person: days before it don't count for them. */
+  tracking_start: string | null;
 };
 
 export type Task = {
@@ -39,6 +41,10 @@ export type Task = {
   per_week: number | null;
   /** Set for "this many times a month, any days" items. */
   per_month: number | null;
+  /** Set for items repeating every N calendar days, anchored to start_date. */
+  repeat_every_days: number | null;
+  /** Comma-separated dates of the month, e.g. "1,16". */
+  month_days: string | null;
   /** For "Your own" types (kind 'other'): the type's name and emoji. */
   custom_type: string | null;
   custom_emoji: string | null;
@@ -70,10 +76,20 @@ export type Checkin = {
 export const ON_TIME_GRACE_MIN = 60;
 
 const MEMBER_COLS =
-  "id, name, is_admin, photo_version, (photo IS NOT NULL OR photo_key IS NOT NULL) AS has_photo, color, active, default_pin, lang, text_size";
+  "id, name, is_admin, photo_version, (photo IS NOT NULL OR photo_key IS NOT NULL) AS has_photo, color, active, default_pin, lang, text_size, tracking_start";
 
 export async function setting(key: string): Promise<string | undefined> {
   return (await get<{ value: string }>("SELECT value FROM settings WHERE key = ?", key))?.value;
+}
+
+/** The day the family's tracking starts (set by an admin); days before it don't count. */
+export const trackingStart = cache(async (): Promise<string | null> => (await setting("tracking_start")) ?? null);
+
+/** The first day that counts for a member: the family's start, or their own (after a reset) if later. */
+export function countsFrom(member: Pick<Member, "tracking_start">, familyStart: string | null): string {
+  const own = member.tracking_start ?? "";
+  const family = familyStart ?? "";
+  return own > family ? own : family;
 }
 
 export const familyName = cache(async (): Promise<string> => (await setting("family_name")) ?? "Our Family");
@@ -92,11 +108,14 @@ export const activeMembers = cache(
 
 /** Whether the item is in force on `date` (so it can be ticked). Weekly-target items are open every day. */
 export function isScheduledOn(task: Task, date: string): boolean {
-  return (
-    task.start_date <= date &&
-    (task.end_date === null || date < task.end_date) &&
-    (!!task.per_week || !!task.per_month || task.days.includes(String(weekday(date))))
-  );
+  if (task.start_date > date || (task.end_date !== null && date >= task.end_date)) return false;
+  if (task.per_week || task.per_month) return true;
+  if (task.repeat_every_days) return daysSince(task.start_date, date) % task.repeat_every_days === 0;
+  if (task.month_days) {
+    const day = parseDate(date).getUTCDate();
+    return task.month_days.split(",").some((value) => Number(value) === day);
+  }
+  return task.days.includes(String(weekday(date)));
 }
 
 /** Tasks that are (or were) in effect at some point during [from, to]. */
@@ -148,7 +167,11 @@ export function weekTarget(perWeek: number, availableDays: number): number {
 }
 
 /** `quotaDone` / `quotaTarget`: for weekly/monthly-target items, progress this week or month. */
-export type TodayItem = Task & { checkin: Checkin | null; quotaDone: number; quotaTarget: number };
+/**
+ * `shortfall`: on the last day of a week/month (for "N times" items), how many sessions are
+ * still missing and will count as missed, worked out exactly as the score does.
+ */
+export type TodayItem = Task & { checkin: Checkin | null; quotaDone: number; quotaTarget: number; shortfall: number };
 
 /**
  * The items to show for a day. A weekly/monthly-target item shows every day until its
@@ -159,23 +182,33 @@ export async function tasksForDay(memberId: number, date: string): Promise<Today
   const [monthStart, monthEnd] = quotaPeriod("month", date);
   const from = weekStart < monthStart ? weekStart : monthStart;
   const to = weekEnd > monthEnd ? weekEnd : monthEnd;
-  const [tasks, checkins] = await Promise.all([
+  const [tasks, checkins, member, breaks, familyStart] = await Promise.all([
     tasksInRange(date, date, memberId),
     all<Checkin>("SELECT * FROM checkins WHERE member_id = ? AND date BETWEEN ? AND ?", memberId, from, to),
+    getMember(memberId),
+    all<Break>("SELECT * FROM away_periods WHERE member_id = ? AND end_date >= ? AND start_date <= ?", memberId, from, to),
+    trackingStart(),
   ]);
   const onDay = new Map(checkins.filter((c) => c.date === date).map((c) => [c.task_id, c]));
+  const countsFromDay = countsFrom(member ?? { tracking_start: null }, familyStart);
+  const onBreak = (d: string) => breaks.some((b) => b.start_date <= d && d <= b.end_date);
   return tasks
     .filter((t) => isScheduledOn(t, date))
     .map((t) => {
       const quota = quotaOf(t);
-      if (!quota) return { ...t, checkin: onDay.get(t.id) ?? null, quotaDone: 0, quotaTarget: 0 };
+      if (!quota) return { ...t, checkin: onDay.get(t.id) ?? null, quotaDone: 0, quotaTarget: 0, shortfall: 0 };
       const [start, end] = quotaPeriod(quota.per, date);
       const periodDays = daysBetween(start, end);
+      // The same sums as the score (stats.history): only counted days, fewer on breaks.
+      const active = periodDays.filter((d) => d >= countsFromDay && isScheduledOn(t, d));
+      const counted = checkins.filter((c) => c.task_id === t.id && active.includes(c.date)).length;
+      const due = quotaTarget(quota.count, active.filter((d) => !onBreak(d)).length, periodDays.length);
       return {
         ...t,
         checkin: onDay.get(t.id) ?? null,
         quotaDone: checkins.filter((c) => c.task_id === t.id && c.date >= start && c.date <= end).length,
         quotaTarget: quotaTarget(quota.count, periodDays.filter((d) => isScheduledOn(t, d)).length, periodDays.length),
+        shortfall: date === end && active.at(-1) === end ? Math.max(0, due - counted) : 0,
       };
     })
     .filter((t) => !quotaOf(t) || t.checkin || t.quotaDone < t.quotaTarget);
@@ -281,4 +314,124 @@ export async function customTypes(): Promise<{ name: string; emoji: string }[]> 
      GROUP BY custom_type ORDER BY custom_type`,
     today(),
   );
+}
+
+/** Everyone's current routine items (for bulk changes). */
+export function allCurrentTasks(): Promise<Task[]> {
+  return all<Task>(
+    `SELECT t.* FROM tasks t JOIN members m ON m.id = t.member_id
+     WHERE m.active = 1 AND (t.end_date IS NULL OR t.end_date > ?) ORDER BY t.member_id, t.any_time, t.time, t.id`,
+    today(),
+  );
+}
+
+// ---------- Fair play: reports and help ----------
+
+/** How many days back a tick can still be reported. */
+export const REPORT_DAYS = 3;
+
+export type Report = {
+  id: number;
+  reporter_id: number;
+  member_id: number;
+  task_id: number;
+  date: string;
+  title: string;
+  reason: string;
+  status: "open" | "upheld" | "dismissed";
+  penalty: number;
+  reward: number;
+  created_at: string;
+  reporter_name: string;
+  member_name: string;
+};
+
+const REPORT_COLS = `r.*, a.name AS reporter_name, b.name AS member_name
+  FROM reports r JOIN members a ON a.id = r.reporter_id JOIN members b ON b.id = r.member_id`;
+
+export function openReports(): Promise<Report[]> {
+  return all<Report>(`SELECT ${REPORT_COLS} WHERE r.status = 'open' ORDER BY r.id`);
+}
+
+/** Reports about one person's recent ticks (to show "reported" next to them). */
+export function recentReportsAbout(memberId: number): Promise<Report[]> {
+  return all<Report>(`SELECT ${REPORT_COLS} WHERE r.member_id = ? AND r.date >= ? ORDER BY r.id`, memberId, addDays(today(), -REPORT_DAYS));
+}
+
+export type HelpRequest = {
+  id: number;
+  member_id: number;
+  helped_id: number;
+  note: string;
+  status: "open" | "approved" | "declined";
+  coins: number;
+  created_at: string;
+  member_name: string;
+  helped_name: string;
+};
+
+const HELP_COLS = `h.*, a.name AS member_name, b.name AS helped_name
+  FROM help_requests h JOIN members a ON a.id = h.member_id JOIN members b ON b.id = h.helped_id`;
+
+export function openHelpRequests(): Promise<HelpRequest[]> {
+  return all<HelpRequest>(`SELECT ${HELP_COLS} WHERE h.status = 'open' ORDER BY h.id`);
+}
+
+/** A member's own recent help requests, newest first. */
+export function myHelpRequests(memberId: number): Promise<HelpRequest[]> {
+  return all<HelpRequest>(`SELECT ${HELP_COLS} WHERE h.member_id = ? ORDER BY h.id DESC LIMIT 10`, memberId);
+}
+
+// ---------- Follow-up: what each person did and missed ----------
+
+export type DayActivity = {
+  date: string;
+  /** Items ticked that day (on time or late). */
+  done: (Pick<Task, "id" | "title" | "kind" | "custom_emoji"> & { on_time: number })[];
+  /** Fixed-day items not ticked. Today these are still "to do", not missed. */
+  missed: Pick<Task, "id" | "title" | "kind" | "custom_emoji">[];
+  /** On a sick or travel break (nothing counts). */
+  away: boolean;
+  /** Before tracking started for this person (nothing counts). */
+  notCounted: boolean;
+};
+
+/**
+ * Day-by-day follow-up for the last `days` days (today first): what was ticked and which
+ * fixed-day items were missed. "N times a week/month" items show when done; their shortfall
+ * is only known at the end of the period, so it isn't listed as missed here.
+ */
+export function recentActivity(member: Pick<Member, "id" | "tracking_start">, days = 7): Promise<DayActivity[]> {
+  const to = today();
+  return activityBetween(member, addDays(to, -(days - 1)), to);
+}
+
+/** The same, for any range of days (newest first); days after today are left out. */
+export async function activityBetween(member: Pick<Member, "id" | "tracking_start">, from: string, until: string): Promise<DayActivity[]> {
+  const now = today();
+  const to = until > now ? now : until;
+  if (from > to) return [];
+  const [tasks, checkins, breaks, familyStart] = await Promise.all([
+    tasksInRange(from, to, member.id),
+    all<Checkin>("SELECT * FROM checkins WHERE member_id = ? AND date BETWEEN ? AND ?", member.id, from, to),
+    all<Break>("SELECT * FROM away_periods WHERE member_id = ? AND end_date >= ? AND start_date <= ?", member.id, from, to),
+    trackingStart(),
+  ]);
+  const start = countsFrom(member, familyStart);
+  const ticks = new Map(checkins.map((c) => [`${c.task_id}|${c.date}`, c]));
+  const lite = (t: Task) => ({ id: t.id, title: t.title, kind: t.kind, custom_emoji: t.custom_emoji });
+  const out: DayActivity[] = [];
+  for (let date = to; date >= from; date = addDays(date, -1)) {
+    const away = breaks.some((b) => b.start_date <= date && date <= b.end_date);
+    const day: DayActivity = { date, done: [], missed: [], away, notCounted: date < start };
+    for (const t of tasks) {
+      if (!isScheduledOn(t, date)) continue;
+      const c = ticks.get(`${t.id}|${date}`);
+      if (c) day.done.push({ ...lite(t), on_time: c.on_time });
+      // Today's open items are always listed (as still to do), even before tracking starts.
+      else if (!quotaOf(t) && !away && (!day.notCounted || date === now)) day.missed.push(lite(t));
+    }
+    out.push(day);
+  }
+  return out;
 }

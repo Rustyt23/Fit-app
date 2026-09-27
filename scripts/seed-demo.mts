@@ -4,6 +4,9 @@
 //
 //   npm run seed:demo   then   npm run dev:demo
 //
+// Safety: it only ever replaces a database it created itself (marked 'sample_data'). If the
+// file holds anything else (e.g. a real family's data), it stops and changes nothing.
+//
 // Every demo member is on the default starting PIN, 0000. Grandma uses Hindi with large text.
 import fs from "node:fs";
 import path from "node:path";
@@ -13,6 +16,23 @@ import { addDays, daysBetween, minutes, nowHHMM, startOfWeek, today, weekday } f
 
 const DEMO_PIN = "0000"; // the default starting PIN
 const file = path.resolve("data/demo.db");
+if (fs.existsSync(file)) {
+  const existing = new (process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite")).DatabaseSync(file, { readOnly: true });
+  let sample = false;
+  try {
+    sample = !!existing.prepare("SELECT 1 FROM settings WHERE key = 'sample_data' AND value = '1'").get();
+  } catch {
+    // no settings table: an empty or unknown file, treat it as not ours
+  }
+  existing.close();
+  if (!sample) {
+    console.error(
+      `\n${file} already exists and wasn't made by this script (it may hold real family data), so nothing was changed.\n` +
+        "Move or rename it first if you really want a fresh sample family there.\n",
+    );
+    process.exit(1);
+  }
+}
 for (const f of [file, `${file}-wal`, `${file}-shm`]) fs.rmSync(f, { force: true });
 const db = openSqlite(file, path.resolve("migrations"));
 
@@ -62,6 +82,8 @@ const pad = (n: number) => String(n).padStart(2, "0");
 
 db.exec("BEGIN");
 db.prepare("INSERT INTO settings (key, value) VALUES ('family_name', 'The Demo Family')").run();
+// Marks this file as sample data, so the next run may replace it (and never a real family's).
+db.prepare("INSERT INTO settings (key, value) VALUES ('sample_data', '1')").run();
 const pinHash = await hashPin(DEMO_PIN);
 
 for (const person of family) {

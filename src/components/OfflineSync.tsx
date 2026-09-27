@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { setCheckin } from "@/app/actions";
-import { dropTick, pendingTicks, serverSnapshot, subscribe } from "@/lib/offline-queue";
+import { dropTick, isNetworkError, pendingTicks, reloadForNewVersion, serverSnapshot, subscribe } from "@/lib/offline-queue";
 import { translator, type Lang } from "@/lib/i18n";
 
 const subscribeOnline = (cb: () => void) => {
@@ -30,7 +30,20 @@ export default function OfflineSync({ memberId, lang }: { memberId: number; lang
 
   useEffect(() => {
     if ("serviceWorker" in navigator && window.isSecureContext) {
-      navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" }).catch(() => {});
+      const hadController = !!navigator.serviceWorker.controller;
+      let reloading = false;
+      const useNewestWorker = () => {
+        if (hadController && !reloading) {
+          reloading = true;
+          window.location.reload();
+        }
+      };
+      navigator.serviceWorker.addEventListener("controllerchange", useNewestWorker);
+      navigator.serviceWorker
+        .register("/sw.js", { scope: "/", updateViaCache: "none" })
+        .then((registration) => registration.update())
+        .catch(() => {});
+      return () => navigator.serviceWorker.removeEventListener("controllerchange", useNewestWorker);
     }
   }, []);
 
@@ -46,8 +59,10 @@ export default function OfflineSync({ memberId, lang }: { memberId: number; lang
         await setCheckin({ taskId: p.taskId, date: p.date, done: p.done, tappedAt: p.tappedAt });
         dropTick(p); // sent (or refused as too old): either way it's handled
         sent++;
-      } catch {
-        break; // still offline, try again later
+      } catch (e) {
+        // Still offline: try again later. Anything else means this page is out of date.
+        if (!isNetworkError(e)) reloadForNewVersion();
+        break;
       }
     }
     busy.current = false;

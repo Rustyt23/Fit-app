@@ -3,7 +3,8 @@
 import { useOptimistic, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { setCheckin } from "@/app/actions";
 import { kindEmoji, type Kind } from "@/lib/kinds";
-import { clearTicksFor, pendingTicks, queueTick, serverSnapshot, subscribe } from "@/lib/offline-queue";
+import { clearTicksFor, isNetworkError, pendingTicks, queueTick, reloadForNewVersion, serverSnapshot, subscribe } from "@/lib/offline-queue";
+import Coin from "@/components/Coin";
 
 export type RowStatus = { tone: "done" | "late" | "overdue" | "due" | "upcoming"; text: string };
 
@@ -78,8 +79,10 @@ export default function TaskRow(props: Props) {
       try {
         await setCheckin(tick);
         clearTicksFor(id, date);
-      } catch {
-        queueTick(tick); // the connection dropped: keep it for later
+      } catch (e) {
+        queueTick(tick); // keep it, so it's sent once possible
+        // Not a lost connection: this page is out of date, so load the new version (which sends the tick).
+        if (!isNetworkError(e)) reloadForNewVersion();
       }
     });
   }
@@ -161,7 +164,9 @@ export default function TaskRow(props: Props) {
           {note && !simple && <span className="block text-xs font-bold text-muted">{note}</span>}
           {showExtras && (coins != null || penaltyText) && (
             <span className="mt-0.5 flex flex-wrap gap-1 text-[11px] font-black">
-              {coins != null && <span className="rounded-full bg-amber-50 px-1.5 text-amber-800">+{coins} 🪙</span>}
+              {coins != null && <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-50 px-1.5 text-amber-800">
+                  +{coins} <Coin size={12} />
+                </span>}
               {penaltyText && <span className="rounded-full bg-stone-100 px-1.5 text-red-600">{penaltyText}</span>}
             </span>
           )}

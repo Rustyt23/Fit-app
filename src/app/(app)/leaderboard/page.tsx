@@ -88,10 +88,13 @@ export default async function LeaderboardPage({ searchParams }: { searchParams: 
         </section>
       )}
 
+      <p className="px-1 text-center text-xs font-bold text-muted">👆 {t("fam.tapHint")}</p>
+
       {rest.length > 0 && (
         <ul className="space-y-2">
           {rest.map((s) => (
-            <li key={s.member.id} className={`card flex items-center gap-3 py-3 ${s.member.id === me.id ? "ring-2 ring-stone-300" : ""}`}>
+            <li key={s.member.id}>
+              <Link href={`/member/${s.member.id}`} className={`card flex items-center gap-3 py-3 transition active:scale-[0.99] ${s.member.id === me.id ? "ring-2 ring-stone-300" : ""}`}>
               <span className="w-7 text-center text-lg font-black text-muted">{s.rank}</span>
               <Avatar member={s.member} size={44} />
               <div className="min-w-0 flex-1">
@@ -107,6 +110,7 @@ export default async function LeaderboardPage({ searchParams }: { searchParams: 
                 <p className="text-lg font-black">{pct(s)}</p>
                 <p className="text-[11px] font-bold text-muted">{t("lb.done", { done: s.done, total: s.scheduled })}</p>
               </div>
+              </Link>
             </li>
           ))}
         </ul>
@@ -195,7 +199,7 @@ function PodiumSpot({ s, place, range, prizes, isMe, t }: { s: Standing; place: 
   const crown = s.rank === 1 ? (range === "today" ? "⭐" : "👑") : null;
   const gift = range !== "today" && hasPrize(prizes[s.rank - 1]);
   return (
-    <div className="flex min-w-0 flex-1 flex-col items-center">
+    <Link href={`/member/${s.member.id}`} className="flex min-w-0 flex-1 flex-col items-center">
       <div className="relative mb-2">
         {crown && <span className="absolute -top-7 left-1/2 -translate-x-1/2 text-3xl drop-shadow">{crown}</span>}
         <Avatar member={s.member} size={sizes[place]} ring={medal} />
@@ -208,6 +212,6 @@ function PodiumSpot({ s, place, range, prizes, isMe, t }: { s: Standing; place: 
       <div className={`mt-2 flex w-full items-start justify-center rounded-t-2xl pt-2 text-2xl font-black text-white ${heights[place]}`} style={{ background: medal }}>
         {s.rank}
       </div>
-    </div>
+    </Link>
   );
 }

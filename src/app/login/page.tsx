@@ -6,7 +6,7 @@ import LoginPicker from "./LoginPicker";
 import { readPrefs } from "@/lib/prefs";
 import { translator } from "@/lib/i18n";
 
-export default async function LoginPage() {
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ m?: string }> }) {
   await connection(); // read the database on every request, not once at build time
   if ((await memberCount()) === 0) redirect("/setup");
   if (await currentMember()) redirect("/today");
@@ -18,7 +18,7 @@ export default async function LoginPage() {
         <p className="text-sm font-bold uppercase tracking-widest text-brand">{await familyName()}</p>
         <h1 className="mt-1 text-3xl font-black">{t("login.who")}</h1>
       </div>
-      <LoginPicker members={await activeMembers()} lang={lang} />
+      <LoginPicker members={await activeMembers()} lang={lang} initialId={Number((await searchParams).m) || undefined} />
     </main>
   );
 }

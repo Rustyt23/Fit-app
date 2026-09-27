@@ -4,7 +4,8 @@ import { saveGameRules } from "@/app/actions";
 import ActionForm, { SubmitButton } from "./ActionForm";
 import Coin from "./Coin";
 import CoinSettings from "./CoinSettings";
-import { translator, type Lang } from "@/lib/i18n";
+import { BADGE_TEXT, translator, type Lang } from "@/lib/i18n";
+import { adminText } from "@/lib/i18n-admin";
 
 function NumberInput({ name, value, label, max, coin = true }: { name: keyof GameRules; value: number; label: string; max: number; coin?: boolean }) {
   return (
@@ -33,39 +34,38 @@ function NumberInput({ name, value, label, max, coin = true }: { name: keyof Gam
 const head = "mb-2 px-1 text-xs font-extrabold uppercase tracking-wider text-muted";
 
 /** Admin card: how much each activity counts towards the score, and how many coins everything earns. */
-export default function RulesForm({ rules }: { rules: GameRules }) {
+export default function RulesForm({ rules, lang = "en" }: { rules: GameRules; lang?: Lang }) {
+  const a = adminText(lang);
   const totalWeight = KINDS.reduce((n, k) => n + rules[weightKey(k.value)], 0);
   return (
     <ActionForm action={saveGameRules} className="space-y-6">
       <div>
-        <p className={head}>Score weight (how much each type counts)</p>
+        <p className={head}>{a("rf.weights")}</p>
         <div className="space-y-2">
           {KINDS.map((k) => {
             const w = rules[weightKey(k.value)];
             return (
               <div key={k.value} className="grid grid-cols-[1fr_5rem] items-center gap-2">
                 <span className="font-bold">
-                  {k.emoji} {k.label}
+                  {k.emoji} {a(`ty.${k.value}`)}
                   <span className="ml-2 text-xs font-bold text-muted">≈ {Math.round((w / totalWeight) * 100)}%</span>
                 </span>
-                <NumberInput name={weightKey(k.value)} value={w} label={`${k.label} weight`} max={MAX_WEIGHT} coin={false} />
+                <NumberInput name={weightKey(k.value)} value={w} label={a("rf.weightOf", { kind: a(`ty.${k.value}`) })} max={MAX_WEIGHT} coin={false} />
               </div>
             );
           })}
         </div>
-        <p className="mt-2 px-1 text-xs text-muted">
-          1 to {MAX_WEIGHT}. Example: exercise 2, supplement 1, medicine 2 means an exercise or medicine counts twice as much as a
-          supplement. The % shows each type&apos;s share on a day with one of each. You can also mark single items as more
-          important when editing a routine.
-        </p>
+        <p className="mt-2 px-1 text-xs text-muted">{a("rf.weightsHint", { max: MAX_WEIGHT })}</p>
       </div>
 
-      <CoinSettings rules={rules} />
+      <CoinSettings rules={rules} lang={lang} />
 
       <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
-        Changes count from today. Scores and coins from earlier days stay the same, so nobody&apos;s history changes.
+        {a("rf.fromToday")}
       </p>
-      <SubmitButton className="btn w-full">Save rules</SubmitButton>
+      <SubmitButton className="btn w-full" pendingText={a("admin.saving")}>
+        {a("rf.save")}
+      </SubmitButton>
     </ActionForm>
   );
 }
@@ -78,7 +78,7 @@ export function CoinRulesList({ rules, lang }: { rules: GameRules; lang: Lang })
       { label: `${k.emoji} ${t("rule.onTime", { kind: t(`kind.${k.value}`) })}`, coins: rules[coinKey(k.value, true)] },
       { label: `${k.emoji} ${t("rule.late", { kind: t(`kind.${k.value}`) })}`, coins: rules[coinKey(k.value, false)] },
     ]),
-    ...COIN_BONUSES.map((b) => ({ label: `${b.emoji} ${t(`rule.${b.key}` as "rule.badge")}`, coins: rules[b.key] })),
+    ...COIN_BONUSES.map((b) => ({ label: `${b.emoji} ${BADGE_TEXT[lang][b.badge].name}`, coins: rules[b.key] })),
   ];
   return (
     <ul className="mt-2 space-y-1 text-sm">

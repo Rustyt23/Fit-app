@@ -3,23 +3,27 @@ import { notFound } from "next/navigation";
 import { requireAdmin } from "@/lib/auth";
 import { BREAK_REASONS, activeMembers, currentTasks, customTypes, getMember, recentBreaks, tasksForDay } from "@/lib/data";
 import { kindEmoji } from "@/lib/kinds";
-import { formatDate, today } from "@/lib/dates";
+import { addDays, formatDate, today } from "@/lib/dates";
 import { copyTask, endBreak, removeMember, removeTask, saveMember, saveTask, startBreak } from "@/app/actions";
 import ActionForm, { SubmitButton } from "@/components/ActionForm";
 import Avatar, { photoUrl } from "@/components/Avatar";
+import Coin from "@/components/Coin";
 import PhotoPicker from "@/components/PhotoPicker";
 import BreakFields from "@/components/BreakFields";
-import TaskFields, { IMPORTANCE, scheduleLabel } from "@/components/TaskFields";
+import TaskFields, { importanceLabel, scheduleLabel } from "@/components/TaskFields";
 import Section, { SubSection } from "@/components/Section";
 import AddTaskForm from "@/components/AddTaskForm";
 import MemberPicker from "@/components/MemberPicker";
 import RemoveManyForm from "@/components/RemoveManyForm";
 import EmptyState from "@/components/EmptyState";
-
-const short = (d: string) => formatDate(d, { day: "numeric", month: "short" });
+import { adminText } from "@/lib/i18n-admin";
 
 export default async function MemberAdminPage({ params }: { params: Promise<{ id: string }> }) {
   const admin = await requireAdmin();
+  const t = adminText(admin.lang);
+  const lang = admin.lang;
+  const short = (d: string) => formatDate(d, { day: "numeric", month: "short" }, lang);
+  const reason = (r: "sick" | "travel") => t(r === "sick" ? "m.sick" : "m.travel");
   const { id } = await params;
   const member = await getMember(Number(id));
   if (!member?.active) notFound();
@@ -44,7 +48,7 @@ export default async function MemberAdminPage({ params }: { params: Promise<{ id
   return (
     <div className="space-y-4">
       <Link href="/admin" className="text-sm font-bold text-muted">
-        ‹ All members
+        {t("m.all")}
       </Link>
 
       <div className="flex items-center gap-4">
@@ -55,68 +59,76 @@ export default async function MemberAdminPage({ params }: { params: Promise<{ id
             {!!member.default_pin && <span className="ml-2 rounded-full bg-orange-100 px-2 py-0.5 align-middle text-xs text-orange-800">PIN 0000</span>}
           </h1>
           <p className="text-sm font-bold text-muted">
-            {tasks.length ? `${tasks.length} routine items` : "No routine yet"}
-            {todayItems.length > 0 && ` · today ${doneCount}/${todayItems.length} done`}
-            {current && ` · ${BREAK_REASONS[current.reason].emoji} on a break`}
+            {tasks.length ? t("m.items", { n: tasks.length }) : t("m.noRoutine")}
+            {todayItems.length > 0 && ` · ${t("m.todayDone", { done: doneCount, total: todayItems.length })}`}
+            {current && ` · ${BREAK_REASONS[current.reason].emoji} ${t("admin.onBreak")}`}
           </p>
         </div>
       </div>
 
       <section className="space-y-2.5">
-        <h2 className="px-1 text-sm font-extrabold uppercase tracking-wider text-muted">Routine</h2>
+        <h2 className="px-1 text-sm font-extrabold uppercase tracking-wider text-muted">{t("m.routine")}</h2>
         {tasks.length === 0 && (
           <EmptyState
-            title="No routine yet"
-            text={`Add ${member.name}'s first exercise, supplement or medicine. Quick-add templates make it one tap.`}
-            action={{ href: "#add", label: "Add the first item" }}
+            title={t("m.noRoutine")}
+            text={t("m.emptyText", { name: member.name })}
+            action={{ href: "#add", label: t("m.addFirst") }}
           />
         )}
-        {tasks.map((t) => {
+        {tasks.map((task) => {
           return (
-            <details key={t.id} className="card group/item py-3">
+            <details key={task.id} className="card group/item py-3">
               <summary className="flex cursor-pointer list-none items-center gap-3">
-                <span className="text-2xl">{kindEmoji(t.kind, t.custom_emoji)}</span>
+                <span className="text-2xl">{kindEmoji(task.kind, task.custom_emoji)}</span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate font-extrabold">{t.title}</span>
+                  <span className="block truncate font-extrabold">{task.title}</span>
                   <span className="block truncate text-sm text-muted">
-                    {scheduleLabel(t)}
-                    {t.weight > 1 && ` · ${IMPORTANCE.find((w) => w.v === t.weight)?.l} ×${t.weight}`}
-                    {t.details && ` · ${t.details}`}
+                    {scheduleLabel(task, lang)}
+                    {task.start_date > date && ` · ${t("m.from", { date: short(task.start_date) })}`}
+                    {task.end_date && ` · ${t("m.until", { date: short(addDays(task.end_date, -1)) })}`}
+                    {task.weight > 1 && ` · ${importanceLabel(task.weight, lang)} ×${task.weight}`}
+                    {task.details && ` · ${task.details}`}
                   </span>
                 </span>
-                {t.coins != null && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-black text-amber-800">+{t.coins}</span>}
-                {t.penalty > 0 && <span className="shrink-0 rounded-full bg-red-50 px-1.5 py-0.5 text-[11px] font-black text-red-600">−{t.penalty}</span>}
-                {doneToday.has(t.id) && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-bold text-emerald-700">✓ today</span>}
-                <span className="text-sm font-bold text-muted group-open/item:hidden">Edit</span>
+                {task.coins != null && (
+                  <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-black text-amber-800">
+                    +{task.coins} <Coin size={11} />
+                  </span>
+                )}
+                {task.penalty > 0 && <span className="shrink-0 rounded-full bg-red-50 px-1.5 py-0.5 text-[11px] font-black text-red-600">−{task.penalty}</span>}
+                {doneToday.has(task.id) && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-bold text-emerald-700">{t("m.todayTick")}</span>}
+                <span className="text-sm font-bold text-muted group-open/item:hidden">{t("admin.edit")}</span>
               </summary>
               <div className="mt-4 border-t border-line pt-4">
                 <ActionForm action={saveTask}>
-                  <TaskFields memberId={member.id} id={t.id} values={t} customTypes={ownTypes} />
-                  <SubmitButton className="btn mt-4 w-full">Save changes</SubmitButton>
+                  <TaskFields memberId={member.id} id={task.id} values={task} customTypes={ownTypes} today={date} lang={lang} />
+                  <SubmitButton className="btn mt-4 w-full" pendingText={t("admin.saving")}>
+                    {t("m.saveChanges")}
+                  </SubmitButton>
                 </ActionForm>
                 {others.length > 0 && (
                   <details className="group/copy mt-3 rounded-2xl border border-line">
                     <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-sm font-bold [&::-webkit-details-marker]:hidden">
                       <span>👥</span>
                       <span className="flex-1">
-                        Give this to others too
-                        <span className="block text-xs font-semibold text-muted">Same settings, added to their routines</span>
+                        {t("m.giveOthers")}
+                        <span className="block text-xs font-semibold text-muted">{t("m.giveOthersHint")}</span>
                       </span>
                       <span className="text-muted transition-transform group-open/copy:rotate-180">⌄</span>
                     </summary>
                     <ActionForm action={copyTask} resetOnSuccess className="border-t border-line p-3">
-                      <input type="hidden" name="id" value={t.id} />
-                      <MemberPicker members={others} />
-                      <SubmitButton className="btn-ghost mt-3 w-full" pendingText="Adding…">
-                        Add to their routines
+                      <input type="hidden" name="id" value={task.id} />
+                      <MemberPicker members={others} lang={lang} />
+                      <SubmitButton className="btn-ghost mt-3 w-full" pendingText={t("admin.adding")}>
+                        {t("m.addToTheirs")}
                       </SubmitButton>
                     </ActionForm>
                   </details>
                 )}
-                <ActionForm action={removeTask} confirm={`Remove "${t.title}" from ${member.name}'s routine?`} className="mt-2 text-center">
-                  <input type="hidden" name="id" value={t.id} />
-                  <SubmitButton className="btn-danger" pendingText="Removing…">
-                    Remove from routine
+                <ActionForm action={removeTask} confirm={t("m.removeQ", { title: task.title, name: member.name })} className="mt-2 text-center">
+                  <input type="hidden" name="id" value={task.id} />
+                  <SubmitButton className="btn-danger" pendingText={t("m.removing")}>
+                    {t("m.removeFromRoutine")}
                   </SubmitButton>
                 </ActionForm>
               </div>
@@ -126,15 +138,16 @@ export default async function MemberAdminPage({ params }: { params: Promise<{ id
       </section>
 
 
-      <Section id="add" variant="add" icon="➕" title={`Add to ${member.name}'s routine`} hint="One-tap templates, or your own">
-        <AddTaskForm memberId={member.id} members={family} action={saveTask} customTypes={ownTypes} />
+      <Section id="add" variant="add" icon="➕" title={t("m.addTo", { name: member.name })} hint={t("m.addHint")}>
+        <AddTaskForm memberId={member.id} members={family} action={saveTask} customTypes={ownTypes} today={date} lang={lang} />
       </Section>
 
       {tasks.length > 1 && (
-        <Section id="remove-many" icon="🗑️" title="Remove several items" hint="Tick the ones to go and remove them in one tap">
+        <Section id="remove-many" icon="🗑️" title={t("m.removeSeveral")} hint={t("m.removeSeveralHint")}>
           <RemoveManyForm
             memberName={member.name}
-            items={tasks.map((t) => ({ id: t.id, emoji: kindEmoji(t.kind, t.custom_emoji), title: t.title, note: scheduleLabel(t) }))}
+            lang={lang}
+            items={tasks.map((x) => ({ id: x.id, emoji: kindEmoji(x.kind, x.custom_emoji), title: x.title, note: scheduleLabel(x, lang) }))}
           />
         </Section>
       )}
@@ -142,26 +155,26 @@ export default async function MemberAdminPage({ params }: { params: Promise<{ id
       <Section
         id="more"
         icon="⚙️"
-        title="Breaks & profile"
+        title={t("m.more")}
         hint={
           current
-            ? `${BREAK_REASONS[current.reason].emoji} ${BREAK_REASONS[current.reason].label} until ${short(current.end_date)}`
-            : `${member.default_pin ? "PIN 0000" : "Own PIN"} · ${member.lang === "hi" ? "हिन्दी" : "English"} · breaks, photo, admin`
+            ? `${BREAK_REASONS[current.reason].emoji} ${t("m.breakUntil", { reason: reason(current.reason), date: short(current.end_date) })}`
+            : t("m.moreHint", { pin: member.default_pin ? "PIN 0000" : t("m.ownPin"), lang: member.lang === "hi" ? "हिन्दी" : "English" })
         }
-        badge={current ? <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-black text-brand-dark">BREAK</span> : undefined}
+        badge={current ? <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-black text-brand-dark">{t("m.breakBadge")}</span> : undefined}
       >
         <SubSection
           id="breaks"
           icon="🤒"
-          title="Breaks"
+          title={t("m.breaks")}
           hint={
             current
-              ? `${BREAK_REASONS[current.reason].label} until ${short(current.end_date)}`
+              ? t("m.breakUntil", { reason: reason(current.reason), date: short(current.end_date) })
               : upcoming
-                ? `Planned from ${short(upcoming.start_date)}`
-                : "Sick or travel days don't count for scores or streaks"
+                ? t("m.plannedFrom", { date: short(upcoming.start_date) })
+                : t("m.breaksHint")
           }
-          badge={current ? <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-black text-brand-dark">NOW</span> : undefined}
+          badge={current ? <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-black text-brand-dark">{t("m.now")}</span> : undefined}
         >
           {breaks.length > 0 && (
             <ul className="mb-4 space-y-2">
@@ -171,23 +184,23 @@ export default async function MemberAdminPage({ params }: { params: Promise<{ id
                   <li key={b.id} className="flex items-center gap-3 rounded-2xl bg-stone-50 px-3 py-2 text-sm">
                     <span className="text-xl">{BREAK_REASONS[b.reason].emoji}</span>
                     <span className="flex-1">
-                      <b>{BREAK_REASONS[b.reason].label}</b> · {b.start_date === b.end_date ? short(b.start_date) : `${short(b.start_date)} – ${short(b.end_date)}`}
-                      {current && <span className="ml-1 rounded-full bg-orange-100 px-1.5 text-[11px] font-bold text-brand-dark">now</span>}
+                      <b>{reason(b.reason)}</b> · {b.start_date === b.end_date ? short(b.start_date) : `${short(b.start_date)} – ${short(b.end_date)}`}
+                      {current && <span className="ml-1 rounded-full bg-orange-100 px-1.5 text-[11px] font-bold text-brand-dark">{t("m.nowSmall")}</span>}
                     </span>
                     {current && b.start_date < date && (
                       <ActionForm action={endBreak}>
                         <input type="hidden" name="id" value={b.id} />
                         <SubmitButton className="btn-ghost px-2 py-1 text-xs" pendingText="…">
-                          End today
+                          {t("m.endToday")}
                         </SubmitButton>
                       </ActionForm>
                     )}
                     {(!self || b.start_date >= date) && (
-                      <ActionForm action={endBreak} confirm="Remove this break completely? Those days will count again.">
+                      <ActionForm action={endBreak} confirm={t("m.removeBreakQ")}>
                         <input type="hidden" name="id" value={b.id} />
                         <input type="hidden" name="delete" value="1" />
                         <SubmitButton className="btn-danger px-2 py-1 text-xs" pendingText="…">
-                          Remove
+                          {t("m.remove")}
                         </SubmitButton>
                       </ActionForm>
                     )}
@@ -197,80 +210,97 @@ export default async function MemberAdminPage({ params }: { params: Promise<{ id
             </ul>
           )}
           <p className="mb-3 text-xs text-muted">
-            {self ? "Your own breaks can only start from today." : "You can also add a past break, e.g. a hospital stay."}
+            {self ? t("m.ownBreaks") : t("m.pastBreak")}
           </p>
           <ActionForm action={startBreak} resetOnSuccess>
-            <BreakFields today={date} memberId={member.id} backdate={!self} />
-            <SubmitButton className="btn-ghost mt-4 w-full">Add break</SubmitButton>
+            <BreakFields today={date} memberId={member.id} backdate={!self} lang={lang} />
+            <SubmitButton className="btn-ghost mt-4 w-full" pendingText={t("admin.adding")}>
+              {t("m.addBreak")}
+            </SubmitButton>
           </ActionForm>
         </SubSection>
 
         <SubSection
           id="profile"
           icon="✏️"
-          title="Profile"
-          hint={`${member.default_pin ? "PIN 0000" : "Own PIN"} · ${member.lang === "hi" ? "हिन्दी" : "English"} · ${member.text_size === "large" ? "Large" : "Normal"} text${member.is_admin ? " · Admin" : ""}`}
+          title={t("m.profile")}
+          hint={[
+            member.default_pin ? "PIN 0000" : t("m.ownPin"),
+            member.lang === "hi" ? "हिन्दी" : "English",
+            t(member.text_size === "large" ? "m.textLarge" : "m.textNormal"),
+            member.is_admin ? t("admin.adminBadge") : "",
+          ]
+            .filter(Boolean)
+            .join(" · ")}
         >
           <ActionForm action={saveMember} className="space-y-4">
             <input type="hidden" name="id" value={member.id} />
             <div>
-              <label className="label" htmlFor="m-name">Name</label>
+              <label className="label" htmlFor="m-name">
+                {t("admin.name")}
+              </label>
               <input id="m-name" name="name" className="field" defaultValue={member.name} required maxLength={40} />
             </div>
             <div>
-              <span className="label">Photo</span>
-              <PhotoPicker current={photoUrl(member)} />
+              <span className="label">{t("admin.photo")}</span>
+              <PhotoPicker current={photoUrl(member)} lang={lang} />
               {!!member.has_photo && (
                 <label className="mt-2 flex items-center gap-2 text-sm font-bold text-muted">
                   <input type="checkbox" name="remove_photo" className="h-4 w-4 accent-brand" />
-                  Remove the current photo
+                  {t("m.removePhoto")}
                 </label>
               )}
             </div>
             <div>
               <label className="label" htmlFor="m-pin">
-                New PIN {member.default_pin ? <span className="text-amber-700">(now: 0000)</span> : "(leave empty to keep)"}
+                {t("m.newPin")} {member.default_pin ? <span className="text-amber-700">{t("m.nowDefault")}</span> : t("m.keepEmpty")}
               </label>
               <input id="m-pin" name="pin" className="field tracking-[0.4em]" inputMode="numeric" pattern="\d{4,6}" maxLength={6} autoComplete="off" />
               {!member.default_pin && (
                 <label className="mt-2 flex items-center gap-2 text-sm font-bold text-muted">
                   <input type="checkbox" name="reset_pin" className="h-4 w-4 accent-brand" />
-                  Reset their PIN to 0000 (e.g. they forgot it)
+                  {t("m.resetPin")}
                 </label>
               )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="label" htmlFor="m-lang">Language</label>
+                <label className="label" htmlFor="m-lang">
+                  {t("admin.language")}
+                </label>
                 <select id="m-lang" name="lang" className="field" defaultValue={member.lang}>
                   <option value="en">English</option>
                   <option value="hi">हिन्दी (Hindi)</option>
                 </select>
               </div>
               <div>
-                <label className="label" htmlFor="m-size">Text size</label>
+                <label className="label" htmlFor="m-size">
+                  {t("admin.textSize")}
+                </label>
                 <select id="m-size" name="text_size" className="field" defaultValue={member.text_size}>
-                  <option value="normal">Normal</option>
-                  <option value="large">Large</option>
+                  <option value="normal">{t("admin.normal")}</option>
+                  <option value="large">{t("admin.large")}</option>
                 </select>
               </div>
             </div>
             <label className="flex items-center gap-3 font-bold">
               <input type="checkbox" name="is_admin" defaultChecked={!!member.is_admin} className="h-5 w-5 accent-brand" />
-              Admin (can manage members and routines)
+              {t("m.isAdmin")}
             </label>
-            <SubmitButton className="btn w-full">Save profile</SubmitButton>
+            <SubmitButton className="btn w-full" pendingText={t("admin.saving")}>
+              {t("m.saveProfile")}
+            </SubmitButton>
           </ActionForm>
 
           {member.id !== admin.id && (
             <ActionForm
               action={removeMember}
-              confirm={`Remove ${member.name} from the family? Their history is kept but they won't be able to log in.`}
+              confirm={t("m.removeMemberQ", { name: member.name })}
               className="mt-3 text-center"
             >
               <input type="hidden" name="id" value={member.id} />
-              <SubmitButton className="btn-danger" pendingText="Removing…">
-                Remove {member.name} from the family
+              <SubmitButton className="btn-danger" pendingText={t("m.removing")}>
+                {t("m.removeMember", { name: member.name })}
               </SubmitButton>
             </ActionForm>
           )}

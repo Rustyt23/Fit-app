@@ -12,6 +12,7 @@ export default function BottomNav({ isAdmin, lang }: { isAdmin: boolean; lang: L
   const items: { href: string; label: string; icon: ReactNode }[] = [
     { href: "/today", label: t("nav.today"), icon: "✅" },
     { href: "/leaderboard", label: t("nav.ranking"), icon: "🏆" },
+    { href: "/family", label: t("nav.family"), icon: "👨‍👩‍👧" },
     { href: "/shop", label: t("nav.shop"), icon: <Coin size={21} /> },
     ...(isAdmin ? [{ href: "/admin", label: t("nav.admin"), icon: "🛠️" }] : []),
     { href: "/me", label: t("nav.me"), icon: "🙂" },
@@ -25,7 +26,7 @@ export default function BottomNav({ isAdmin, lang }: { isAdmin: boolean; lang: L
             <li key={item.href} className="flex-1">
               <Link
                 href={item.href}
-                className={`flex flex-col items-center gap-0.5 py-2.5 text-xs font-bold ${active ? "text-ink" : "text-muted"}`}
+                className={`flex flex-col items-center gap-0.5 py-2.5 text-[11px] font-bold leading-tight ${active ? "text-ink" : "text-muted"}`}
               >
                 <span className={`grid h-7 place-items-center text-xl transition ${active ? "scale-110" : "opacity-70 grayscale"}`}>{item.icon}</span>
                 {item.label}

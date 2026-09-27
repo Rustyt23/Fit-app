@@ -3,6 +3,8 @@
 import { useState } from "react";
 import type { Member } from "@/lib/data";
 import Avatar from "./Avatar";
+import type { Lang } from "@/lib/i18n";
+import { adminText } from "@/lib/i18n-admin";
 
 export type PickableMember = Pick<Member, "id" | "name" | "color" | "has_photo" | "photo_version">;
 
@@ -11,15 +13,19 @@ export default function MemberPicker({
   members,
   selected: initial = [],
   onChange,
+  lang = "en",
 }: {
   members: PickableMember[];
   selected?: number[];
-  onChange?: (count: number) => void;
+  /** Called with the picked ids whenever they change. */
+  onChange?: (ids: number[]) => void;
+  lang?: Lang;
 }) {
+  const t = adminText(lang);
   const [selected, setSelected] = useState<Set<number>>(new Set(initial));
   const update = (next: Set<number>) => {
     setSelected(next);
-    onChange?.(next.size);
+    onChange?.([...next]);
   };
   const toggle = (id: number) => {
     const next = new Set(selected);
@@ -55,7 +61,7 @@ export default function MemberPicker({
           onClick={() => update(everyone ? new Set() : new Set(members.map((m) => m.id)))}
           className="mt-2 rounded-full border border-line bg-white px-3 py-1 text-sm font-bold text-muted"
         >
-          {everyone ? "Clear" : "👨‍👩‍👧 Everyone"}
+          {everyone ? t("af.clear") : `👨‍👩‍👧 ${t("af.everyone")}`}
         </button>
       )}
     </div>

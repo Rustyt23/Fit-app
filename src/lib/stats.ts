@@ -1,9 +1,9 @@
 import "server-only";
 import { cache } from "react";
 import { all, batch, get, nowStamp, run, sql } from "./db";
-import { activeMembers, isScheduledOn, quotaOf, quotaPeriod, quotaTarget, type Checkin, type Kind, type Member, type Task } from "./data";
+import { activeMembers, countsFrom, isScheduledOn, quotaOf, quotaPeriod, quotaTarget, trackingStart, type Checkin, type Kind, type Member, type Task } from "./data";
 import { addDays, daysBetween, instantOf, minutes, nextMonth, nowHHMM, startOfMonth, startOfWeek, today } from "./dates";
-import { PLACES, coinKey, eventPrizes, eventThemes, hasPrize, ruleVersions, rulesAt, weightKey, type EventKind, type Prize } from "./rules";
+import { PLACES, bonusKey, coinKey, eventPrizes, eventThemes, hasPrize, ruleVersions, rulesAt, weightKey, type BadgeId, type EventKind, type Prize } from "./rules";
 import { resolveTheme, type Theme } from "./themes";
 import { lastFinalDay } from "./tick-window";
 
@@ -69,20 +69,26 @@ export function coinsForTask(t: Pick<Task, "coins" | "kind">, onTime: boolean, r
 export const history = cache(async () => {
   const end = today();
   const finalDay = lastFinalDay(end, nowHHMM());
-  const [tasks, checkins, away, members, versions] = await Promise.all([
+  const [tasks, checkins, away, members, versions, familyStart] = await Promise.all([
     all<Task>("SELECT * FROM tasks ORDER BY time"),
     all<Checkin>("SELECT * FROM checkins"),
     all<AwayPeriod>("SELECT * FROM away_periods"),
     activeMembers(),
     ruleVersions(),
+    trackingStart(),
   ]);
-  const first = tasks.reduce((min, t) => (t.start_date < min ? t.start_date : min), end);
+  // Nothing before the family's tracking start counts (an admin can choose it, e.g. after testing).
+  let first = tasks.reduce((min, t) => (t.start_date < min ? t.start_date : min), end);
+  if (familyStart && familyStart > first) first = familyStart;
   const days = daysBetween(first, end);
   const done = new Map(checkins.map((c) => [`${c.task_id}|${c.date}`, c]));
   const rulesByDay = new Map(days.map((d) => [d, rulesAt(versions, d)]));
 
   const byMember = new Map<number, DayStat[]>();
   for (const m of members) {
+    // After a reset, this person's own start can be later than the family's.
+    const from = countsFrom(m, familyStart);
+    const counts = (date: string) => date >= from;
     const breaks = away.filter((a) => a.member_id === m.id);
     const breakOn = (date: string) => breaks.find((b) => b.start_date <= date && date <= b.end_date) ?? null;
     const stats: DayStat[] = days.map((date) => ({
@@ -130,7 +136,7 @@ export const history = cache(async () => {
     for (const t of tasks.filter((t) => t.member_id === m.id)) {
       const quota = quotaOf(t);
       if (!quota) {
-        for (const s of stats) if (isScheduledOn(t, s.date)) add(s, t, 1, done.get(`${t.id}|${s.date}`));
+        for (const s of stats) if (counts(s.date) && isScheduledOn(t, s.date)) add(s, t, 1, done.get(`${t.id}|${s.date}`));
         continue;
       }
       // Weekly/monthly target: done days count as they happen; any shortfall falls due on
@@ -138,7 +144,7 @@ export const history = cache(async () => {
       for (let p = quotaPeriod(quota.per, t.start_date)[0]; p <= end; p = addDays(quotaPeriod(quota.per, p)[1], 1)) {
         const [pStart, pEnd] = quotaPeriod(quota.per, p);
         const periodDays = daysBetween(pStart, pEnd);
-        const activeDays = periodDays.filter((d) => isScheduledOn(t, d));
+        const activeDays = periodDays.filter((d) => counts(d) && isScheduledOn(t, d));
         if (!activeDays.length) continue;
         let doneCount = 0;
         for (const d of activeDays) {
@@ -396,9 +402,7 @@ export function eventResults(kind?: EventKind): Promise<EventResult[]> {
 
 // ---------- Badges & coins ----------
 
-export type BadgeId =
-  | "first_step" | "perfect_day" | "streak_3" | "streak_7" | "streak_30" | "early_bird"
-  | "perfect_pill" | "century" | "star_of_day" | "perfect_week" | "champion";
+export type { BadgeId } from "./game";
 
 export const BADGES: { id: BadgeId; emoji: string; name: string; how: string; repeat?: boolean }[] = [
   { id: "first_step", emoji: "🌱", name: "First Step", how: "Tick your first task" },
@@ -425,19 +429,35 @@ export type Achievements = {
   /** Coins taken away for missed items. */
   coinsPenalty: number;
   coinsSpent: number;
+  /** Coins an admin gave (+) or took (−) by hand: gifts, report outcomes, help awards. */
+  coinsAdjusted: number;
   coins: number;
+  /** Where every coin came from and went, newest first (the balance is their sum). */
+  ledger: CoinEntry[];
+};
+
+/** One line of a coin history. `text`: a reward's name, an admin's reason, or the event. */
+export type CoinEntry = {
+  date: string;
+  amount: number;
+  kind: "tasks" | "penalty" | "badge" | "prize" | "spent" | "adjust";
+  badge?: BadgeId;
+  event?: EventKind;
+  place?: number;
+  text?: string;
 };
 
 /** Badges, streaks and coin balance for every active member. Cached per request. */
 export const achievements = cache(async (): Promise<Map<number, Achievements>> => {
-  const [{ members, byMember, versions }, results, spentRows] = await Promise.all([
+  const [{ members, byMember, versions }, results, spentRows, adjustRows, familyStart] = await Promise.all([
     history(),
     eventResults(),
-    all<{ member_id: number; n: number }>(
-      "SELECT member_id, SUM(cost) AS n FROM redemptions WHERE status != 'declined' GROUP BY member_id",
+    all<{ member_id: number; cost: number; day: string; emoji: string; title: string }>(
+      "SELECT member_id, cost, substr(requested_at, 1, 10) AS day, emoji, title FROM redemptions WHERE status != 'declined'",
     ),
+    all<{ member_id: number; amount: number; date: string; reason: string }>("SELECT member_id, amount, date, reason FROM coin_adjustments"),
+    trackingStart(),
   ]);
-  const spent = new Map(spentRows.map((r) => [r.member_id, r.n]));
   const t = today();
   const yesterday = addDays(t, -1);
 
@@ -455,9 +475,12 @@ export const achievements = cache(async (): Promise<Map<number, Achievements>> =
   const result = new Map<number, Achievements>();
   for (const m of members) {
     const days = byMember.get(m.id)!;
+    // Only what happened since tracking started (for this person) counts towards coins.
+    const from = countsFrom(m, familyStart);
     const earned = new Map<BadgeId, EarnedBadge>();
     let coinsEarned = 0;
     let coinsPenalty = 0;
+    const ledger: CoinEntry[] = [];
     const award = (id: BadgeId, date: string) => {
       const b = earned.get(id);
       if (b) {
@@ -465,8 +488,9 @@ export const achievements = cache(async (): Promise<Map<number, Achievements>> =
         b.last = date;
       } else earned.set(id, { id, count: 1, first: date, last: date });
       // Bonus coins, at the rate in force on the day it was earned.
-      const rules = rulesAt(versions, date);
-      coinsEarned += id === "perfect_day" || id === "star_of_day" || id === "perfect_week" ? rules[id] : rules.badge;
+      const bonus = rulesAt(versions, date)[bonusKey(id)];
+      coinsEarned += bonus;
+      if (bonus) ledger.push({ date, amount: bonus, kind: "badge", badge: id });
     };
 
     let totalDone = 0, early = 0, streakRun = 0, pillRun = 0;
@@ -474,6 +498,8 @@ export const achievements = cache(async (): Promise<Map<number, Achievements>> =
       // Task coins (worked out in history() with the rules in force that day), minus penalties.
       coinsEarned += d.coins;
       coinsPenalty += d.penalty;
+      if (d.coins) ledger.push({ date: d.date, amount: d.coins, kind: "tasks" });
+      if (d.penalty) ledger.push({ date: d.date, amount: -d.penalty, kind: "penalty" });
       totalDone += d.done;
       early += d.earlyOnTime;
       if (d.done > 0 && !earned.has("first_step")) award("first_step", d.date);
@@ -506,13 +532,23 @@ export const achievements = cache(async (): Promise<Map<number, Achievements>> =
     }
     for (const date of stars.get(m.id) ?? []) award("star_of_day", date);
 
-    const mine = results.filter((r) => r.member_id === m.id);
+    // Event wins count if the event ended after tracking started.
+    const periodEnd = (r: EventResult) => (r.event === "week" ? addDays(r.period, 6) : addDays(nextMonth(r.period), -1));
+    const mine = results.filter((r) => r.member_id === m.id && periodEnd(r) >= from);
     for (const r of mine.filter((r) => r.event === "month" && r.place === 1)) award("champion", addDays(nextMonth(r.period), -1));
     const prizeCoins = mine.reduce((n, r) => n + r.prize_coins, 0);
     coinsEarned += prizeCoins;
+    for (const r of mine) if (r.prize_coins) ledger.push({ date: periodEnd(r), amount: r.prize_coins, kind: "prize", event: r.event, place: r.place });
 
     const badges = BADGES.map((b) => earned.get(b.id)).filter((b): b is EarnedBadge => !!b);
-    const coinsSpent = spent.get(m.id) ?? 0;
+    const spentMine = spentRows.filter((r) => r.member_id === m.id && r.day >= from);
+    const adjustMine = adjustRows.filter((r) => r.member_id === m.id && r.date >= from);
+    const coinsSpent = spentMine.reduce((n, r) => n + r.cost, 0);
+    const coinsAdjusted = adjustMine.reduce((n, r) => n + r.amount, 0);
+    for (const r of spentMine) ledger.push({ date: r.day, amount: -r.cost, kind: "spent", text: `${r.emoji} ${r.title}` });
+    for (const r of adjustMine) ledger.push({ date: r.date, amount: r.amount, kind: "adjust", text: r.reason });
+    // Newest first; within a day: earnings, then spending.
+    ledger.sort((a, b) => b.date.localeCompare(a.date) || b.amount - a.amount);
     result.set(m.id, {
       badges,
       streak: streakOf(days),
@@ -520,7 +556,9 @@ export const achievements = cache(async (): Promise<Map<number, Achievements>> =
       prizeCoins,
       coinsPenalty,
       coinsSpent,
-      coins: coinsEarned - coinsPenalty - coinsSpent,
+      coinsAdjusted,
+      coins: coinsEarned - coinsPenalty - coinsSpent + coinsAdjusted,
+      ledger,
     });
   }
   return result;
@@ -535,7 +573,9 @@ export async function achievementsFor(memberId: number): Promise<Achievements> {
       prizeCoins: 0,
       coinsPenalty: 0,
       coinsSpent: 0,
+      coinsAdjusted: 0,
       coins: 0,
+      ledger: [],
     }
   );
 }

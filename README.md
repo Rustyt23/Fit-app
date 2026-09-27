@@ -29,12 +29,13 @@ A small web app for the family to follow their **exercise, supplement and medici
 
 ### Everyday features
 
-- **🕙 Forgot to tick?** Yesterday's items can still be ticked until **10 AM**. They count as done, just not "on time". Weekly and monthly winners are picked at 10 AM the day after an event ends, so these late ticks still count.
+- **🕙 Forgot to tick?** Yesterday's items can still be ticked until **10 AM** (Today → 🕙). They count as done, just not "on time". Weekly and monthly winners are picked at 10 AM the day after an event ends, so these late ticks still count.
 - **📴 Works offline:** once opened over https, the app keeps working without internet. Ticks are saved on the phone (shown with ⏳) and sent automatically when it's back online, with the time they were really tapped.
-- **🔠 Hindi and large text:** each person picks English or हिन्दी, and normal or large text, under **Me → Settings & more → Display & language**. Admins can also set it for them, e.g. for grandparents. Member screens are translated; the admin area stays in English.
+- **🔠 Hindi and large text:** each person picks English or हिन्दी, and normal or large text, under **Me → Settings & more → Display & language**. Admins can also set it for them, e.g. for grandparents. Everything is translated, including the whole admin area for an admin who uses Hindi.
 - **🎯 Event themes:** each week or month can be judged on the full routine, exercise only, punctuality (share on time), medicine on time, or most improved. By default the weekly challenge **rotates** through themes automatically.
 - **🌤️ Flexible time:** an item can be "at a set time" or "any time of day". Any-time items are never late, sit under "Any time today", and get one reminder at 6 PM if not done.
-- **🔁 Flexible days:** "set days", "N times a week" (once to 6×) or "N times a month" (once to 4×, e.g. a monthly check-up), on any days. A weekly or monthly item shows every day until it has been done enough times that week or month. Whatever is still missing counts on the last day (Sunday, or the month's last day). Weeks and months the item only partly covers (added part-way through, or break days) get a smaller target, e.g. 3× a week from Thursday → 2, or twice a month from the 16th → once.
+- **🗓️ Simple schedules:** new items start as **every day, any time of day**. **Customise** opens dropdowns for the time (any time or a set time), how it repeats (every day, certain weekdays, every few days, N times a week, N times a month, or dates of the month) and when it **starts** and **ends** (e.g. a 5-day course of tablets). Items that start later are listed with "from …" and only show up from that day.
+- **🔁 Flexible days:** "N times a week" (once to 6×) or "N times a month" (once to 4×, e.g. a monthly check-up), on any days. On the week's or month's last day, Today says clearly if one of these is still short ("Gym: 2 of 3 this week, 1 counts as missed today"), so a fully ticked list that doesn't reach 100% is never a mystery. A weekly or monthly item shows every day until it has been done enough times that week or month. Whatever is still missing counts on the last day (Sunday, or the month's last day). Weeks and months the item only partly covers (added part-way through, or break days) get a smaller target, e.g. 3× a week from Thursday → 2, or twice a month from the 16th → once.
 - **✨ Your own types:** besides exercise, supplement and medicine, an item can be your own type with its own name and emoji (🧘 Mind, 💧 Water, 📖 Reading…). Types already in use are offered as quick picks. They count in the score and earn coins like the others, with their own row in **Rules & coins**.
 - **🪙 Coins and ➖ penalties per item:** an admin can give an item its own coin reward (overriding the coin rules; late ticks get half) and a penalty taken when it's missed. Penalties are only taken once a day is final (after the next morning's 10 AM window), never on break days, and for weekly and monthly items only for the sessions still missing at the end of the week or month. Members see "+10 🪙" and "−5 if missed" on the item, and the Shop shows how many coins were lost.
 - **🔑 PIN 0000 to start:** new members get PIN **0000** unless the admin types one. The admin page shows who is still on 0000, and an admin can set a proper PIN or reset someone back to 0000 any time.
@@ -48,11 +49,30 @@ A small web app for the family to follow their **exercise, supplement and medici
 - **Folding sections** everywhere (Admin, member pages, Me), each with a one-line summary while closed.
   - **Me** shows just My week, Badges and **Settings & more** (break, reminders, language, photo, PIN, home screen).
   - A member's admin page keeps breaks and profile together under **Breaks & profile**.
-  - **Admin** shows what needs you (folded, with a count), the family, the add buttons and one **⚙️ Setup** group holding Rules & coins, Events & prizes, Coin shop, Family name and Recent changes.
+  - **Admin** shows the family first (each with their coins and this month's rank), then **Bulk changes**, Add a family member, one **⚙️ Setup** group (Rules & coins, Events & prizes, Coin shop, Family name, Tracking & reset, Recent changes) and, at the bottom, **Needs your attention** (folded, with a count).
 - Orange is used only for things that **need you** (due now, missed, requests, prizes to hand over). Everything else stays calm.
 - **Admin shortcuts:** one-tap **quick-add templates** (walk, yoga, gym 3×/week, vitamin D3, BP tablet…). The task form shows only the everyday choices: who, type, what, when, how often, and coins and penalty. Details and importance sit under **More options**. New items start as **any time of day**, **+2 coins** when done and **−1** if missed. Quick-add templates keep their suggested times. **Coin presets:** Normal / Generous / Strict, or Custom for every number.
-- **One item for several people:** when adding an item, tap the photos of everyone who should get it (or **Everyone**), e.g. a protein shake every day for the whole family. This works from **Admin → Add one item for several people** or from any member's page. Each person gets their own copy, so it can still be changed for one person later. Anyone who already has an item with that name is skipped. An existing item can also be copied as it is with **Give this to others too**.
+- **🧰 Bulk changes (Admin):** pick one person, several or **Everyone**, then **Add** an item for all of them, **Change** an item they share (matched by name, e.g. make everyone's "Protein shake" 8 AM), or **Remove** several items at once. Each person keeps their own copy, so it can still be changed for one person later; anyone who already has an item with that name is skipped when adding. A member's page also has "Who gets this" when adding, and **Give this to others too** on each item.
 - **Remove several items at once:** on a member's page, open **Remove several items**, tick the ones to go (or **Select all**) and remove them with one tap. As with removing one item, days already done keep their scores and coins.
+
+### Family and fair play
+
+- **🕙 📅 📊 on Today:** three small icons at the top. **Yesterday** shows yesterday's items (they can still be ticked until 10 AM; the icon gets a dot while something is left). **Calendar** shows each month with every day coloured by how it went; tap a day to see what was done and missed. **Progress chart** shows bars for the last 30 days and weekly averages for the last 12 weeks. Anyone's calendar and chart can be opened from their day page.
+- **👨‍👩‍👧 Family tab:** one page with everyone's follow-up: rank this month, coins and streak; today's items done ✓ and still to do ⏳; the last 7 days as coloured tiles (done/scheduled); what they missed recently; and the rewards they chose. Each card opens that person's full day.
+- **👀 See each other's day:** tap anyone's photo (on Today or in the Ranking) to see their day: today's progress, what's done and when, this week's score, streak, coins and their full routine. Everyone can see everyone.
+- **🚩 Report a fake tick:** on someone else's day, a ticked item from the last 3 days has **Report**. The report (with an optional reason) goes to **Admin → Needs your attention**, where an admin either dismisses it or upholds it: choosing how many coins to take from the person (default 5), how many to give the reporter (default 2), and whether to untick it so it doesn't count. The person reported, and the person reporting, don't decide on it when another admin can.
+- **🤝 Help awards:** on someone else's day, **I helped …** lets you say what you did. An admin gives coins for it (default 5) or declines. Your requests and their status are on your own day page.
+- The Shop shows coins from reports and helping on their own line.
+- **📒 Coin history** (Shop, and each person's day page): every coin in and out with the reason: routine ticks, each badge by name, event prizes, gifts, report and help outcomes, rewards bought and missed-item penalties. The lines always add up to the balance.
+- **🎁 Gift coins (Admin):** give coins to one person, several or everyone, with a reason they see in their coin history (and a notification).
+
+### Tracking and resets (Admin → Setup → Tracking & reset)
+
+- **Start tracking from:** days before the chosen date don't count for scores, coins, streaks, badges or events. Nothing is deleted, so it can be moved back ("Count everything again"). A later date shows everyone "Tracking starts on …" on Today.
+- **Reset one person** (type their name): deletes their ticks, coins, rewards bought, prizes, breaks, reports and help requests; their routine and profile stay and they start from today.
+- **Reset everyone's progress** (type RESET): the same for everyone. Members, routines, rewards and rules stay; tracking restarts today.
+- **Factory reset** (type the family name): deletes everything and opens the first-run setup again.
+- On a home server, a copy of the database is saved to `data/backups/` before any reset. On Cloudflare, D1's Time Travel can restore an earlier state.
 
 ### What admins decide (Admin page)
 
@@ -60,13 +80,13 @@ A small web app for the family to follow their **exercise, supplement and medici
 |---|---|
 | 👨‍👩‍👧 Members | Names, photos (add, change or remove), PINs (0000 by default), language and text size, admin rights, routine, breaks |
 | ⚖️ Rules & coins | How much each activity type (including your own types) counts towards the score %, and coins for every activity and bonus |
-| Routine item | Who gets it (one person, several or everyone); type (or your own, with a name and emoji); set time or any time; set days, N times a week or N times a month; **importance** (×1, ×2, ×3); its own coins; a penalty if missed |
+| Routine item | Who gets it (one person, several or everyone); type (or your own, with a name and emoji); set time or any time; every day, weekdays, every few days, N times a week, N times a month or dates of the month; start and end dates; **importance** (×1, ×2, ×3); its own coins; a penalty if missed |
 | 🏆 Events & prizes | What each event is judged on (or rotate automatically), prizes per place, and whether each one is a surprise |
 | 🛍️ Shop | Rewards, their prices, and which ones are mystery rewards |
 
 ### How coins are earned (admins choose the amounts)
 
-In **Admin → Setup → Rules & coins**, admins set coins per activity type, on time and late (exercise, supplement, medicine, your own types), plus the bonuses for a Perfect Day, Star of the Day, Perfect Week and every other badge. Defaults: 2 on time / 1 late for every type, and bonuses of 5 / 5 / 10 / 20.
+In **Admin → Setup → Rules & coins**, admins set coins per activity type, on time and late (exercise, supplement, medicine, your own types), plus a coin bonus for **each badge** (First Step, Perfect Day, Star of the Day, Perfect Week, On Fire, Unstoppable, Legend, Early Bird, Perfect Pill, Century, Champion). Defaults: 2 on time / 1 late for every type; Perfect Day 5, Star of the Day 5, Perfect Week 10, every other badge 20.
 
 A change counts **from that day on**. Coins already earned never change, so nobody's balance jumps or goes negative. Coins, streaks and badges are all calculated from the check-in history, so unticking a task takes its coins back and nothing can be counted twice.
 
@@ -131,7 +151,7 @@ npm run seed:demo
 npm run dev:demo
 ```
 
-This creates `data/demo.db` with 4 members on PIN 0000 (Grandma uses Hindi with large text), 6 weeks of history (so past weeks and last month have winners), a sick break and a stocked coin shop. Your real data isn't touched.
+This creates `data/demo.db` with 4 members on PIN 0000 (Grandma uses Hindi with large text), 6 weeks of history (so past weeks and last month have winners), a sick break and a stocked coin shop. It only ever replaces a sample file it made itself: if `data/demo.db` holds anything else (such as a real family's data), it stops and changes nothing.
 
 ## Development
 
@@ -139,7 +159,7 @@ This creates `data/demo.db` with 4 members on PIN 0000 (Grandma uses Hindi with 
 npm run dev        # http://localhost:3000 with hot reload
 npm run typecheck
 npm run lint
-npm test           # 71 automated tests: scoring, weekly/monthly items, own types, adding for several people, removing several, weights, breaks, streaks, themes, events, coins, PINs, push, dates, migrations, translations
+npm test           # 96 automated tests: coin history, badge coins, gifts, weekly shortfalls, family follow-up, scoring, weekly/monthly items, schedules, own types, bulk changes, reports, help awards, tracking start, resets, weights, breaks, streaks, themes, events, coins, PINs, push, dates, migrations, translations
 npm run backup     # copy of data/family.db into data/backups/
 npm run cf:preview # the Cloudflare Workers build, locally (see DEPLOY.md)
 npm run cf:export  # data/family.db as SQL for importing into D1

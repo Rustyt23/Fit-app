@@ -76,6 +76,22 @@ describe("one item for several people", () => {
     const res = await actions.saveTask(undefined, form({ ...protein, title: "Vitamin D3", member_id: String(N) }));
     expect(res?.message).toBe('Added "Vitamin D3" to Neha\'s routine.');
   });
+
+  it("saves interval and specific-month-date schedules", async () => {
+    await actions.saveTask(undefined, form({ ...protein, title: "Water plants", days_mode: "interval", repeat_every_days: "15", member_id: String(P) }));
+    await actions.saveTask(
+      undefined,
+      form({ ...protein, title: "Check measurements", days_mode: "month_dates", month_days: ["16", "1"], member_id: String(P) }),
+    );
+    expect(await db.get("SELECT repeat_every_days, month_days FROM tasks WHERE title = 'Water plants'")).toEqual({
+      repeat_every_days: 15,
+      month_days: null,
+    });
+    expect(await db.get("SELECT repeat_every_days, month_days FROM tasks WHERE title = 'Check measurements'")).toEqual({
+      repeat_every_days: null,
+      month_days: "1,16",
+    });
+  });
 });
 
 describe("give an existing item to others", () => {

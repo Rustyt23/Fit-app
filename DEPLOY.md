@@ -1,6 +1,117 @@
-# Putting Family Fit online with Cloudflare
+# Putting Family Fit online
 
-There are two ways. Both give you `https://yourdomain.com` with Cloudflare in front, and both make phone reminders work.
+**fit.synerix.fun runs on an Ubuntu server with nginx: see [Option U](#option-u-your-own-linux-server-ubuntu--nginx) first.** Options A and B below are Cloudflare alternatives.
+
+Whichever way you choose, a few rules always hold:
+
+- Run the **production** build (`npm run build`, then `next start`). Never `next dev` for the live site: it's slow, shows a developer "N" button, and breaks open pages whenever code changes.
+- Set **`DB_PATH`** to the one database file that holds the family's data, as an absolute path. On startup the app prints `[family-fit] Database: …`; if it says **NEW, EMPTY**, the path is wrong and the app will show the first-run setup screen.
+- Database changes (`migrations/`) are applied automatically when the app starts. Back up first (below).
+
+# Option U: Your own Linux server (Ubuntu + nginx)
+
+## U1. Install (once)
+
+Needs **Node.js 22.13+** (`node -v`); for example from [nodesource](https://github.com/nodesource/distributions).
+
+```bash
+sudo mkdir -p /opt/family-fit /var/lib/family-fit && sudo chown $USER /opt/family-fit /var/lib/family-fit
+git clone git@github.com:Rustyt23/Fit-app.git /opt/family-fit
+cd /opt/family-fit
+npm ci
+npm run build
+```
+
+If you already have a database (e.g. copied from another computer), put it at `/var/lib/family-fit/family.db`.
+Copy it with the app stopped, or make a safe copy first with `sqlite3 old.db ".backup family.db"`.
+
+## U2. Run it as a service
+
+`/etc/systemd/system/family-fit.service`:
+
+```ini
+[Unit]
+Description=Family Fit
+After=network.target
+
+[Service]
+User=YOUR_USER
+WorkingDirectory=/opt/family-fit
+Environment=NODE_ENV=production
+Environment=DB_PATH=/var/lib/family-fit/family.db
+Environment=APP_TIMEZONE=Asia/Kolkata
+Environment=COOKIE_SECURE=true
+Environment=VAPID_SUBJECT=mailto:you@yourdomain.com
+ExecStart=/usr/bin/npx next start -H 127.0.0.1 -p 3000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now family-fit
+journalctl -u family-fit -n 20      # should show "[family-fit] Database: /var/lib/family-fit/family.db"
+```
+
+## U3. nginx and HTTPS
+
+`/etc/nginx/sites-available/family-fit` (then link it into `sites-enabled`):
+
+```nginx
+server {
+    server_name fit.synerix.fun;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;   # lets the app mark login cookies secure
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        client_max_body_size 2m;                       # profile photos
+    }
+}
+```
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d fit.synerix.fun           # free HTTPS certificate, renews itself
+```
+
+The app itself sends the basic security headers (no framing, no MIME sniffing, HSTS over https).
+
+## U4. Backups (daily)
+
+```bash
+crontab -e
+# every night at 02:30: a copy in /var/lib/family-fit/backups, the newest 30 kept
+30 2 * * * cd /opt/family-fit && DB_PATH=/var/lib/family-fit/family.db BACKUP_DIR=/var/lib/family-fit/backups /usr/bin/npm run backup >> /var/lib/family-fit/backup.log 2>&1
+```
+
+Copy the backups off the server now and then (e.g. `scp` to your computer). Every reset in the app also saves a copy first.
+
+## U5. Updating to a new version
+
+```bash
+cd /opt/family-fit
+DB_PATH=/var/lib/family-fit/family.db npm run backup     # safety copy first
+git pull
+npm ci
+npm run build
+sudo systemctl restart family-fit                        # applies any new database changes
+journalctl -u family-fit -n 20
+```
+
+## U6. Before handing over
+
+- Every member has their own PIN (Admin shows who is still on 0000).
+- **Admin → Setup → Tracking & reset**: the start date is right, and practice data is cleared (**Reset everyone's progress**; routines stay).
+- **Events & prizes** and **Rules & coins** (including coins per badge) are what the family agreed.
+- Open the site on each phone, **Add to Home Screen**, and turn on reminders under **Me → Settings & more**.
+
+---
+
+There are also two Cloudflare ways. Both give you `https://yourdomain.com` with Cloudflare in front, and both make phone reminders work.
 
 | | **A. Cloudflare Tunnel** | **B. Cloudflare Workers + D1** |
 |---|---|---|

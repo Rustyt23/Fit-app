@@ -8,6 +8,8 @@ import Coin, { CoinAmount } from "@/components/Coin";
 import EmptyState from "@/components/EmptyState";
 import { CoinRulesList } from "@/components/RulesForm";
 import { translator } from "@/lib/i18n";
+import CoinLedger from "@/components/CoinLedger";
+import Section from "@/components/Section";
 
 const STATUS = {
   requested: { key: "shop.requested", cls: "bg-amber-50 text-amber-800" },
@@ -33,12 +35,21 @@ export default async function ShopPage() {
           {t("shop.earnedSpent", { earned: ach.coinsEarned, spent: ach.coinsSpent })}
           {ach.prizeCoins ? ` ${t("shop.fromPrizes", { n: ach.prizeCoins })}` : ""}
           {ach.coinsPenalty > 0 && <span className="block font-bold text-red-600">{t("shop.penalties", { n: ach.coinsPenalty })}</span>}
+          {ach.coinsAdjusted !== 0 && (
+            <span className={`block font-bold ${ach.coinsAdjusted > 0 ? "text-emerald-700" : "text-red-600"}`}>
+              {t("shop.adjusted", { n: `${ach.coinsAdjusted > 0 ? "+" : "−"}${Math.abs(ach.coinsAdjusted)}` })}
+            </span>
+          )}
         </p>
         <details className="mt-3 text-left">
           <summary className="cursor-pointer text-center text-sm font-bold text-amber-800 underline">{t("shop.howEarn")}</summary>
           <CoinRulesList rules={rules} lang={me.lang} />
         </details>
       </section>
+
+      <Section id="coins" icon="📒" title={t("ledger.title")} hint={t("ledger.hint")}>
+        <CoinLedger ledger={ach.ledger} lang={me.lang} />
+      </Section>
 
       <section>
         <h2 className="mb-2 px-1 text-sm font-extrabold uppercase tracking-wider text-muted">🛍️ {t("shop.rewards")}</h2>

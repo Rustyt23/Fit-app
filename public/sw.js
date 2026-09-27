@@ -3,7 +3,7 @@
 //  - keeps the app usable offline: app files are cached, and the Today page falls
 //    back to its last copy when there's no internet (ticks are queued on the phone).
 
-const CACHE = "ff-offline-v1";
+const CACHE = "ff-offline-v2";
 const OFFLINE_PAGE = "/today";
 
 self.addEventListener("install", () => self.skipWaiting());
@@ -22,8 +22,26 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (req.method !== "GET" || url.origin !== self.location.origin) return;
 
-  // Build files, icons and photos never change at a given URL: cache first.
-  if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/pwa-icon/") || url.pathname.startsWith("/api/photo/")) {
+  // Next's development chunk URLs can stay the same after source changes, so use
+  // the network first and refresh the offline copy. The browser's HTTP cache still
+  // avoids unnecessary production downloads, where filenames are content-hashed.
+  if (url.pathname.startsWith("/_next/static/")) {
+    event.respondWith(
+      caches.open(CACHE).then(async (cache) => {
+        try {
+          const res = await fetch(req);
+          if (res.ok) cache.put(req, res.clone());
+          return res;
+        } catch {
+          return (await cache.match(req)) || new Response("You're offline.", { status: 503 });
+        }
+      }),
+    );
+    return;
+  }
+
+  // Versioned icons and photos never change at a given URL: cache first.
+  if (url.pathname.startsWith("/pwa-icon/") || url.pathname.startsWith("/api/photo/")) {
     event.respondWith(
       caches.open(CACHE).then(async (cache) => {
         const hit = await cache.match(req);

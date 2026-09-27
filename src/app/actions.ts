@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { all, batch, get, nowStamp, run, sql } from "@/lib/db";
+import { all, batch, dbPath, get, nowStamp, onCloudflare, run, sql, type Statement } from "@/lib/db";
 import { hashPin, isValidPin, needsRehash, verifyPin } from "@/lib/pin";
 import {
   clearFailures,
@@ -17,6 +17,7 @@ import {
   AVATAR_COLORS,
   BREAK_REASONS,
   KINDS,
+  REPORT_DAYS,
   STARTER_REWARDS,
   activeMembers,
   getMember,
@@ -24,7 +25,9 @@ import {
   isScheduledOn,
   memberCount,
   type Break,
+  type HelpRequest,
   type Redemption,
+  type Report,
   type Reward,
   type Task,
 } from "@/lib/data";
@@ -47,9 +50,10 @@ import { sendToMember } from "@/lib/push";
 import { removePhoto, savePhoto } from "@/lib/photos";
 import { readPrefs, writePrefs } from "@/lib/prefs";
 import { isLang, translator } from "@/lib/i18n";
+import { adminText, type AT } from "@/lib/i18n-admin";
 import { isThemeSetting } from "@/lib/themes";
 import { canTick } from "@/lib/tick-window";
-import { addDays, formatDate, formatMonth, today, zonedDateTime } from "@/lib/dates";
+import { addDays, formatDate, formatMonth, startOfWeek, today, zonedDateTime } from "@/lib/dates";
 
 export type FormState = { error?: string; message?: string; n?: number } | undefined;
 
@@ -189,6 +193,7 @@ export async function toggleCheckin(taskId: number) {
 
 export async function saveMember(_: FormState, fd: FormData): Promise<FormState> {
   const admin = await requireAdmin();
+  const at = adminText(admin.lang);
   const id = Number(fd.get("id")) || null;
   const name = str(fd, "name", 40);
   const pin = str(fd, "pin", 6);
@@ -198,11 +203,11 @@ export async function saveMember(_: FormState, fd: FormData): Promise<FormState>
   const dropPhoto = fd.get("remove_photo") === "on";
   const lang = isLang(fd.get("lang")) ? String(fd.get("lang")) : null;
   const textSize = fd.get("text_size") === "large" ? "large" : fd.get("text_size") === "normal" ? "normal" : null;
-  if (!name) return fail("Name is required.");
+  if (!name) return fail(at("x.nameRequired"));
 
   if (!id) {
     const newPin = pin || DEFAULT_PIN;
-    if (!isValidPin(newPin)) return fail("PIN must be 4 to 6 digits (or leave it empty for 0000).");
+    if (!isValidPin(newPin)) return fail(at("x.pinDigitsNew"));
     const { lastRowId } = await run(
       "INSERT INTO members (name, pin_hash, default_pin, is_admin, photo_version, color, lang, text_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       name, await hashPin(newPin), newPin === DEFAULT_PIN ? 1 : 0, isAdmin, Date.now(), await nextColor(), lang ?? "en", textSize ?? "normal",
@@ -210,13 +215,13 @@ export async function saveMember(_: FormState, fd: FormData): Promise<FormState>
     if (photo) await savePhoto(lastRowId, photo);
     await audit(admin.id, `Added ${name}${isAdmin ? " as an admin" : ""}`);
     refresh();
-    return ok(`${name} has joined the family${newPin === DEFAULT_PIN ? " (PIN 0000)" : ""}! Now give them a routine.`);
+    return ok(at("x.joined", { name, pin: newPin === DEFAULT_PIN ? " (PIN 0000)" : "" }));
   }
 
   const member = await getMember(id);
-  if (!member?.active) return fail("Member not found.");
-  if (pin && !isValidPin(pin)) return fail("New PIN must be 4 to 6 digits.");
-  if (member.is_admin && !isAdmin && (await otherActiveAdmins(id)) === 0) return fail("The family needs at least one admin.");
+  if (!member?.active) return fail(at("x.memberNotFound"));
+  if (pin && !isValidPin(pin)) return fail(at("x.pinDigits"));
+  if (member.is_admin && !isAdmin && (await otherActiveAdmins(id)) === 0) return fail(at("x.needAdmin"));
 
   const newPin = pin || (resetPin ? DEFAULT_PIN : "");
   await batch(
@@ -238,15 +243,16 @@ export async function saveMember(_: FormState, fd: FormData): Promise<FormState>
   ].filter(Boolean);
   if (changes.length) await audit(admin.id, changes.join(", ").replace(/^./, (c) => c.toUpperCase()));
   refresh();
-  return ok("Saved.");
+  return ok(at("x.saved"));
 }
 
 export async function removeMember(_: FormState, fd: FormData): Promise<FormState> {
   const admin = await requireAdmin();
+  const at = adminText(admin.lang);
   const id = Number(fd.get("id"));
-  if (id === admin.id) return fail("You can't remove yourself.");
+  if (id === admin.id) return fail(at("x.notYourself"));
   const member = await getMember(id);
-  if (!member?.active) return fail("Member not found.");
+  if (!member?.active) return fail(at("x.memberNotFound"));
   const date = today();
   await batch(
     sql("UPDATE members SET active = 0 WHERE id = ?", id),
@@ -259,43 +265,126 @@ export async function removeMember(_: FormState, fd: FormData): Promise<FormStat
 
 export async function saveFamilyName(_: FormState, fd: FormData): Promise<FormState> {
   const admin = await requireAdmin();
+  const at = adminText(admin.lang);
   const family = str(fd, "family", 60);
-  if (!family) return fail("Family name can't be empty.");
+  if (!family) return fail(at("x.familyEmpty"));
   await run("INSERT OR REPLACE INTO settings (key, value) VALUES ('family_name', ?)", family);
   await audit(admin.id, `Renamed the family to "${family}"`);
   refresh();
-  return ok("Saved.");
+  return ok(at("x.saved"));
 }
 
 // ---------- Admin: routines ----------
 
 type TaskSettings = Pick<
   Task,
-  "kind" | "title" | "details" | "time" | "days" | "weight" | "any_time" | "per_week" | "per_month" | "custom_type" | "custom_emoji" | "coins" | "penalty"
+  "kind" | "title" | "details" | "time" | "days" | "weight" | "any_time" | "per_week" | "per_month" | "repeat_every_days" | "month_days" | "custom_type" | "custom_emoji" | "coins" | "penalty"
 >;
 
-function insertTask(memberId: number, v: TaskSettings, start: string) {
+function insertTask(memberId: number, v: TaskSettings, start: string, end: string | null = null) {
   return sql(
-    `INSERT INTO tasks (member_id, kind, title, details, time, days, weight, any_time, per_week, per_month, custom_type, custom_emoji, coins, penalty, start_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    memberId, v.kind, v.title, v.details, v.time, v.days, v.weight, v.any_time, v.per_week, v.per_month, v.custom_type, v.custom_emoji, v.coins, v.penalty, start,
+    `INSERT INTO tasks (member_id, kind, title, details, time, days, weight, any_time, per_week, per_month, repeat_every_days, month_days, custom_type, custom_emoji, coins, penalty, start_date, end_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    memberId, v.kind, v.title, v.details, v.time, v.days, v.weight, v.any_time, v.per_week, v.per_month, v.repeat_every_days, v.month_days,
+    v.custom_type, v.custom_emoji, v.coins, v.penalty, start, end,
   );
 }
 
 /** "Mom", "Mom and Neha", "Mom, Neha and Vicky" */
-function nameList(names: string[]): string {
-  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : (names[0] ?? "");
+function nameList(names: string[], and = "and"): string {
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} ${and} ${names.at(-1)}` : (names[0] ?? "");
+}
+
+const isDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
+
+/** A routine item form, read and checked. `start` is null when the form doesn't set one; `lastDay` is the inclusive end. */
+type TaskForm = { settings: TaskSettings; start: string | null; lastDay: string | null };
+
+function readTaskForm(fd: FormData, at: AT): TaskForm | { error: string } {
+  const kind = str(fd, "kind", 20);
+  const title = str(fd, "title", 80);
+  const details = str(fd, "details", 160);
+  const anyTime = fd.get("time_mode") === "any" ? 1 : 0;
+  const time = anyTime ? "" : str(fd, "time", 5);
+  const daysMode = String(fd.get("days_mode") ?? "days");
+  const perWeek = daysMode === "weekly" ? Math.round(Number(fd.get("per_week"))) : null;
+  const perMonth = daysMode === "monthly" ? Math.round(Number(fd.get("per_month"))) : null;
+  const repeatEveryDays = daysMode === "interval" ? Math.round(Number(fd.get("repeat_every_days"))) : null;
+  const monthDays = daysMode === "month_dates"
+    ? [...new Set(fd.getAll("month_days").map(Number))].filter((day) => Number.isInteger(day) && day >= 1 && day <= 31).sort((a, b) => a - b).join(",")
+    : null;
+  const days =
+    perWeek || perMonth || repeatEveryDays || monthDays ? "0123456" : [...new Set(fd.getAll("days").map(String))].filter((d) => /^[0-6]$/.test(d)).sort().join("");
+  // "Your own" types carry their own name and emoji.
+  const customType = kind === "other" ? str(fd, "custom_type", 30) : null;
+  const customEmoji = kind === "other" ? str(fd, "custom_emoji", 8) || "✨" : null;
+  const weight = Math.round(Number(fd.get("weight") ?? 1));
+  const coinsText = str(fd, "coins", 4);
+  const coins = coinsText === "" ? null : Number(coinsText);
+  const penalty = Number(str(fd, "penalty", 4) || 0);
+  const date = today();
+  const startText = str(fd, "start_date", 10);
+  const start = isDate(startText) && startText >= date && startText <= addDays(date, 366) ? startText : null;
+  const lastText = str(fd, "last_day", 10);
+
+  if (!KINDS.some((k) => k.value === kind)) return { error: at("x.pickType") };
+  if (!title) return { error: at("x.giveName") };
+  if (!anyTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return { error: at("x.pickTime") };
+  if (kind === "other" && !customType) return { error: at("x.ownTypeName") };
+  if (daysMode === "weekly" && !(perWeek! >= 1 && perWeek! <= 6)) return { error: at("x.perWeek") };
+  if (daysMode === "monthly" && !(perMonth! >= 1 && perMonth! <= 4)) return { error: at("x.perMonth") };
+  if (daysMode === "interval" && !(repeatEveryDays! >= 1 && repeatEveryDays! <= 365)) return { error: at("x.interval") };
+  if (daysMode === "month_dates" && !monthDays) return { error: at("x.monthDate") };
+  if (!days) return { error: at("x.oneDay") };
+  if (!(weight >= 1 && weight <= 3)) return { error: at("x.importance") };
+  if (coins !== null && !(Number.isInteger(coins) && coins >= 0 && coins <= MAX_COINS_PER_RULE)) {
+    return { error: at("x.coinsRange", { max: MAX_COINS_PER_RULE }) };
+  }
+  if (!(Number.isInteger(penalty) && penalty >= 0 && penalty <= MAX_COINS_PER_RULE)) {
+    return { error: at("x.penaltyRange", { max: MAX_COINS_PER_RULE }) };
+  }
+  if (lastText && (!isDate(lastText) || lastText < date)) return { error: at("x.lastDayPast") };
+  if (lastText && start && lastText < start) return { error: at("x.lastBeforeStart") };
+
+  return {
+    settings: {
+      kind: kind as Task["kind"],
+      title,
+      details,
+      time,
+      days,
+      weight,
+      any_time: anyTime,
+      per_week: perWeek,
+      per_month: perMonth,
+      repeat_every_days: repeatEveryDays,
+      month_days: monthDays,
+      custom_type: customType,
+      custom_emoji: customEmoji,
+      coins,
+      penalty,
+    },
+    start,
+    lastDay: lastText || null,
+  };
 }
 
 /**
  * Adds the same item to several people's routines at once. Each person gets their own copy
  * (so it can be changed for one person later), and anyone who already has it is skipped.
  */
-async function addToRoutines(adminId: number, v: TaskSettings, memberIds: number[]): Promise<FormState> {
+async function addToRoutines(
+  adminId: number,
+  at: AT,
+  v: TaskSettings,
+  memberIds: number[],
+  start = today(),
+  end: string | null = null,
+): Promise<FormState> {
   const ids = [...new Set(memberIds)];
-  if (!ids.length) return fail("Pick at least one person.");
+  if (!ids.length) return fail(at("x.pickPerson"));
   const members = (await activeMembers()).filter((m) => ids.includes(m.id));
-  if (members.length !== ids.length) return fail("Member not found.");
+  if (members.length !== ids.length) return fail(at("x.memberNotFound"));
   const date = today();
   const has = new Set(
     (
@@ -306,121 +395,164 @@ async function addToRoutines(adminId: number, v: TaskSettings, memberIds: number
     ).map((r) => r.member_id),
   );
   const adding = members.filter((m) => !has.has(m.id));
-  const skipped = nameList(members.filter((m) => has.has(m.id)).map((m) => m.name));
+  const skipped = nameList(members.filter((m) => has.has(m.id)).map((m) => m.name), at("bk.and"));
   if (!adding.length) {
-    return fail(members.length === 1 ? `${skipped} already has "${v.title}".` : `${skipped} already have "${v.title}".`);
+    return fail(at(members.length === 1 ? "x.alreadyHasOne" : "x.alreadyHasMany", { names: skipped, title: v.title }));
   }
 
-  await batch(...adding.map((m) => insertTask(m.id, v, date)));
-  const names = nameList(adding.map((m) => m.name));
-  await audit(adminId, `Added ${v.kind} "${v.title}" for ${names}`);
+  await batch(...adding.map((m) => insertTask(m.id, v, start, end)));
+  const names = nameList(adding.map((m) => m.name), at("bk.and"));
+  await audit(adminId, `Added ${v.kind} "${v.title}" for ${nameList(adding.map((m) => m.name))}`);
   refresh();
-  const added = adding.length === 1 ? `Added "${v.title}" to ${names}'s routine.` : `Added "${v.title}" for ${names}.`;
-  return ok(skipped ? `${added} ${skipped} already ${members.length - adding.length === 1 ? "has" : "have"} it.` : added);
+  const added = adding.length === 1 ? at("x.addedTo", { title: v.title, name: names }) : at("x.addedFor", { title: v.title, names });
+  return ok(skipped ? `${added} ${at(members.length - adding.length === 1 ? "x.alsoHasOne" : "x.alsoHasMany", { names: skipped })}` : added);
+}
+
+/**
+ * The changes that turn an existing item into `form`. Anything that affects scores or coins
+ * would rewrite the past if edited in place, so then the old version ends today and a new
+ * one continues (today's tick moves across). Items that haven't started yet are just edited.
+ */
+function editTask(task: Task, form: TaskForm, date: string, at: AT): Statement[] | { error: string } {
+  const v = form.settings;
+  const notStarted = task.start_date > date;
+  const start = notStarted ? (form.start ?? task.start_date) : task.start_date;
+  const end = form.lastDay ? addDays(form.lastDay, 1) : null;
+  if (end && end <= start) return { error: at("x.lastBeforeStart") };
+  const scoringChanged =
+    task.days !== v.days ||
+    task.kind !== v.kind ||
+    task.weight !== v.weight ||
+    task.any_time !== v.any_time ||
+    task.per_week !== v.per_week ||
+    task.per_month !== v.per_month ||
+    task.repeat_every_days !== v.repeat_every_days ||
+    task.month_days !== v.month_days ||
+    task.coins !== v.coins ||
+    task.penalty !== v.penalty ||
+    (task.time !== v.time && !v.any_time);
+  if (scoringChanged && task.start_date < date) {
+    return [
+      sql("UPDATE tasks SET end_date = ? WHERE id = ?", date, task.id),
+      insertTask(task.member_id, v, date, end),
+      sql(
+        "UPDATE checkins SET task_id = (SELECT MAX(id) FROM tasks WHERE member_id = ?) WHERE task_id = ? AND date = ?",
+        task.member_id, task.id, date,
+      ),
+    ];
+  }
+  return [
+    sql(
+      `UPDATE tasks SET kind = ?, title = ?, details = ?, time = ?, days = ?, weight = ?, any_time = ?, per_week = ?, per_month = ?,
+       repeat_every_days = ?, month_days = ?, custom_type = ?, custom_emoji = ?, coins = ?, penalty = ?, start_date = ?, end_date = ? WHERE id = ?`,
+      v.kind, v.title, v.details, v.time, v.days, v.weight, v.any_time, v.per_week, v.per_month, v.repeat_every_days, v.month_days,
+      v.custom_type, v.custom_emoji, v.coins, v.penalty, start, end, task.id,
+    ),
+  ];
 }
 
 export async function saveTask(_: FormState, fd: FormData): Promise<FormState> {
   const admin = await requireAdmin();
+  const at = adminText(admin.lang);
   const id = Number(fd.get("id")) || null;
   const memberId = Number(fd.get("member_id"));
   // The add form lets you pick several people; editing is always for one.
   const memberIds = !id && fd.has("pick_members") ? fd.getAll("member_ids").map(Number) : [memberId];
-  const kind = str(fd, "kind", 20);
-  const title = str(fd, "title", 80);
-  const details = str(fd, "details", 160);
-  const anyTime = fd.get("time_mode") === "any" ? 1 : 0;
-  const time = anyTime ? "" : str(fd, "time", 5);
-  const daysMode = String(fd.get("days_mode") ?? "days");
-  const perWeek = daysMode === "weekly" ? Math.round(Number(fd.get("per_week"))) : null;
-  const perMonth = daysMode === "monthly" ? Math.round(Number(fd.get("per_month"))) : null;
-  const days =
-    perWeek || perMonth ? "0123456" : [...new Set(fd.getAll("days").map(String))].filter((d) => /^[0-6]$/.test(d)).sort().join("");
-  // "Your own" types carry their own name and emoji.
-  const customType = kind === "other" ? str(fd, "custom_type", 30) : null;
-  const customEmoji = kind === "other" ? str(fd, "custom_emoji", 8) || "✨" : null;
-  const weight = Math.round(Number(fd.get("weight") ?? 1));
-  const coinsText = str(fd, "coins", 4);
-  const coins = coinsText === "" ? null : Number(coinsText);
-  const penalty = Number(str(fd, "penalty", 4) || 0);
+  const form = readTaskForm(fd, at);
+  if ("error" in form) return fail(form.error);
 
-  if (!KINDS.some((k) => k.value === kind)) return fail("Pick a type.");
-  if (!title) return fail("Give it a name, like \"Morning walk\" or \"Vitamin D\".");
-  if (!anyTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return fail("Pick a time, or choose \"Any time\".");
-  if (kind === "other" && !customType) return fail("Give your own type a name, e.g. Meditation or Water.");
-  if (daysMode === "weekly" && !(perWeek! >= 1 && perWeek! <= 6)) return fail("Pick how many times a week (1 to 6).");
-  if (daysMode === "monthly" && !(perMonth! >= 1 && perMonth! <= 4)) return fail("Pick how many times a month (1 to 4).");
-  if (!days) return fail("Pick at least one day.");
-  if (!(weight >= 1 && weight <= 3)) return fail("Importance must be normal, high or top.");
-  if (coins !== null && !(Number.isInteger(coins) && coins >= 0 && coins <= MAX_COINS_PER_RULE)) {
-    return fail(`Coins must be a whole number from 0 to ${MAX_COINS_PER_RULE} (or empty to use the coin rules).`);
+  if (!id) {
+    const start = form.start ?? today();
+    return addToRoutines(admin.id, at, form.settings, memberIds, start, form.lastDay ? addDays(form.lastDay, 1) : null);
   }
-  if (!(Number.isInteger(penalty) && penalty >= 0 && penalty <= MAX_COINS_PER_RULE)) {
-    return fail(`Penalty must be a whole number from 0 to ${MAX_COINS_PER_RULE}.`);
-  }
-
-  const settings: TaskSettings = {
-    kind: kind as Task["kind"],
-    title,
-    details,
-    time,
-    days,
-    weight,
-    any_time: anyTime,
-    per_week: perWeek,
-    per_month: perMonth,
-    custom_type: customType,
-    custom_emoji: customEmoji,
-    coins,
-    penalty,
-  };
-  if (!id) return addToRoutines(admin.id, settings, memberIds);
 
   const member = await getMember(memberId);
-  if (!member?.active) return fail("Member not found.");
+  if (!member?.active) return fail(at("x.memberNotFound"));
   const date = today();
   const task = await get<Task>("SELECT * FROM tasks WHERE id = ? AND member_id = ?", id, memberId);
-  if (!task || (task.end_date && task.end_date <= date)) return fail("Routine item not found.");
-
-  // Anything that affects scores or coins would rewrite the past if edited in place, so
-  // the old version ends today and a new one continues (today's tick moves across).
-  const scoringChanged =
-    task.days !== days ||
-    task.kind !== kind ||
-    task.weight !== weight ||
-    task.any_time !== anyTime ||
-    task.per_week !== perWeek ||
-    task.per_month !== perMonth ||
-    task.coins !== coins ||
-    task.penalty !== penalty ||
-    (task.time !== time && !anyTime);
-  if (scoringChanged && task.start_date < date) {
-    await batch(
-      sql("UPDATE tasks SET end_date = ? WHERE id = ?", date, id),
-      insertTask(memberId, settings, date),
-      sql(
-        "UPDATE checkins SET task_id = (SELECT MAX(id) FROM tasks WHERE member_id = ?) WHERE task_id = ? AND date = ?",
-        memberId, id, date,
-      ),
-    );
-  } else {
-    await run(
-      `UPDATE tasks SET kind = ?, title = ?, details = ?, time = ?, days = ?, weight = ?, any_time = ?, per_week = ?, per_month = ?,
-       custom_type = ?, custom_emoji = ?, coins = ?, penalty = ? WHERE id = ?`,
-      kind, title, details, time, days, weight, anyTime, perWeek, perMonth, customType, customEmoji, coins, penalty, id,
-    );
-  }
-  await audit(admin.id, `Updated ${member.name}'s "${title}"`);
+  if (!task || (task.end_date && task.end_date <= date)) return fail(at("x.itemNotFound"));
+  const changes = editTask(task, form, date, at);
+  if ("error" in changes) return fail(changes.error);
+  await batch(...changes);
+  await audit(admin.id, `Updated ${member.name}'s "${form.settings.title}"`);
   refresh();
-  return ok("Saved.");
+  return ok(at("x.saved"));
+}
+
+/**
+ * Bulk edit: applies one set of settings to an item (matched by name) in several people's
+ * routines at once, e.g. "Protein shake" for everyone now at 8 AM.
+ */
+export async function bulkEditTasks(_: FormState, fd: FormData): Promise<FormState> {
+  const admin = await requireAdmin();
+  const at = adminText(admin.lang);
+  const match = str(fd, "match_title", 80);
+  const memberIds = [...new Set(fd.getAll("member_ids").map(Number))];
+  if (!memberIds.length) return fail(at("x.pickPerson"));
+  if (!match) return fail(at("x.pickItem"));
+  const form = readTaskForm(fd, at);
+  if ("error" in form) return fail(form.error);
+  const date = today();
+  const tasks = (
+    await all<Task>("SELECT * FROM tasks WHERE lower(title) = lower(?) AND (end_date IS NULL OR end_date > ?) ORDER BY member_id, id", match, date)
+  ).filter((t) => memberIds.includes(t.member_id));
+  if (!tasks.length) return fail(at("x.nobodyHas", { title: match }));
+  // Renaming onto a name someone already has would give them two of the same.
+  if (form.settings.title.toLowerCase() !== match.toLowerCase()) {
+    const clash = await get<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM tasks WHERE lower(title) = lower(?) AND (end_date IS NULL OR end_date > ?) AND member_id IN (${tasks.map(() => "?").join(", ")})`,
+      form.settings.title, date, ...tasks.map((t) => t.member_id),
+    );
+    if (clash!.n) return fail(at("x.clash", { title: form.settings.title }));
+  }
+  const changes: Statement[] = [];
+  for (const t of tasks) {
+    const c = editTask(t, form, date, at);
+    if ("error" in c) return fail(c.error);
+    changes.push(...c);
+  }
+  await batch(...changes);
+  const members = await activeMembers();
+  const who = [...new Set(tasks.map((t) => members.find((m) => m.id === t.member_id)?.name ?? "?"))];
+  const names = nameList(who, at("bk.and"));
+  await audit(admin.id, `Changed "${match}" for ${nameList(who)}`);
+  refresh();
+  return ok(at("x.savedFor", { title: form.settings.title, names }));
+}
+
+/** Bulk remove: takes the ticked items (by name) out of the picked people's routines. */
+export async function bulkRemoveTasks(_: FormState, fd: FormData): Promise<FormState> {
+  const admin = await requireAdmin();
+  const at = adminText(admin.lang);
+  const memberIds = [...new Set(fd.getAll("member_ids").map(Number))];
+  const titles = [...new Set(fd.getAll("titles").map((t) => String(t).toLowerCase()))];
+  if (!memberIds.length) return fail(at("x.pickPerson"));
+  if (!titles.length) return fail(at("x.tickRemove"));
+  const date = today();
+  const ids = (
+    await all<{ id: number; member_id: number; title: string }>(
+      "SELECT id, member_id, title FROM tasks WHERE end_date IS NULL OR end_date > ?",
+      date,
+    )
+  )
+    .filter((t) => memberIds.includes(t.member_id) && titles.includes(t.title.toLowerCase()))
+    .map((t) => t.id);
+  if (!ids.length) return fail(at("x.nobodyHasThose"));
+  const removed = await endTasks(ids);
+  if (!removed) return fail(at("x.alreadyRemoved"));
+  for (const [name, list] of removed) await audit(admin.id, `Removed ${nameList(list)} from ${name}'s routine`);
+  refresh();
+  return ok(at("x.removedFrom", { count: ids.length === 1 ? at("rm.oneItem") : at("rm.nItems", { n: ids.length }), names: nameList([...removed.keys()], at("bk.and")) }));
 }
 
 /** "Give this to others too": copies an existing item, exactly as it is, to other people's routines. */
 export async function copyTask(_: FormState, fd: FormData): Promise<FormState> {
   const admin = await requireAdmin();
+  const at = adminText(admin.lang);
   const task = await get<Task>("SELECT * FROM tasks WHERE id = ? AND (end_date IS NULL OR end_date > ?)", Number(fd.get("id")), today());
-  if (!task) return fail("Routine item not found.");
+  if (!task) return fail(at("x.itemNotFound"));
   const ids = fd.getAll("member_ids").map(Number).filter((m) => m !== task.member_id);
-  return addToRoutines(admin.id, task, ids);
+  return addToRoutines(admin.id, at, task, ids);
 }
 
 /** Takes items out of routines, returning what was removed per person (null if any were not found). */
@@ -444,23 +576,25 @@ async function endTasks(ids: number[]): Promise<Map<string, string[]> | null> {
 
 export async function removeTask(_: FormState, fd: FormData): Promise<FormState> {
   const admin = await requireAdmin();
+  const at = adminText(admin.lang);
   const removed = await endTasks([Number(fd.get("id"))]);
-  if (!removed) return fail("Routine item not found.");
+  if (!removed) return fail(at("x.itemNotFound"));
   for (const [name, titles] of removed) await audit(admin.id, `Removed ${titles[0]} from ${name}'s routine`);
   refresh();
-  return ok("Removed.");
+  return ok(at("x.removed"));
 }
 
 /** Removes several routine items at once (e.g. a finished course of tablets). */
 export async function removeTasks(_: FormState, fd: FormData): Promise<FormState> {
   const admin = await requireAdmin();
+  const at = adminText(admin.lang);
   const ids = [...new Set(fd.getAll("ids").map(Number))];
-  if (!ids.length) return fail("Tick the items you want to remove.");
+  if (!ids.length) return fail(at("x.tickRemove"));
   const removed = await endTasks(ids);
-  if (!removed) return fail("Some of those items were already removed. Refresh the page and try again.");
+  if (!removed) return fail(at("x.alreadyRemoved"));
   for (const [name, titles] of removed) await audit(admin.id, `Removed ${nameList(titles)} from ${name}'s routine`);
   refresh();
-  return ok(ids.length === 1 ? "Removed 1 item." : `Removed ${ids.length} items.`);
+  return ok(at("x.removedN", { count: ids.length === 1 ? at("rm.oneItem") : at("rm.nItems", { n: ids.length }) }));
 }
 
 // ---------- My profile ----------
@@ -508,7 +642,7 @@ export async function startBreak(_: FormState, fd: FormData): Promise<FormState>
   const tr = translator(me.lang);
   const memberId = Number(fd.get("member_id")) || me.id;
   const member = await getMember(memberId);
-  if (!member?.active) return fail("Member not found.");
+  if (!member?.active) return fail(adminText(me.lang)("x.memberNotFound"));
   // Admins can plan or back-date a break for someone else (e.g. "Grandma was in hospital last week").
   // For your own breaks everyone, admins included, can only start from today.
   const canBackdate = !!me.is_admin && memberId !== me.id;
@@ -588,11 +722,12 @@ export async function cancelRedemption(_: FormState, fd: FormData): Promise<Form
 
 export async function resolveRedemption(_: FormState, fd: FormData): Promise<FormState> {
   const admin = await requireAdmin();
+  const at = adminText(admin.lang);
   const status = str(fd, "status", 10);
-  if (status !== "given" && status !== "declined") return fail("Unknown choice.");
+  if (status !== "given" && status !== "declined") return fail(at("x.unknown"));
   const r = await get<Redemption>("SELECT * FROM redemptions WHERE id = ? AND status = 'requested'", Number(fd.get("id")));
-  if (!r) return fail("Already handled.");
-  if (r.member_id === admin.id && (await otherActiveAdmins(admin.id)) > 0) return fail("Another admin should approve your own request.");
+  if (!r) return fail(at("x.handled"));
+  if (r.member_id === admin.id && (await otherActiveAdmins(admin.id)) > 0) return fail(at("x.otherApprove"));
   await run(
     "UPDATE redemptions SET status = ?, resolved_at = ?, resolved_by = ? WHERE id = ?",
     status, nowStamp(), admin.id, r.id,
@@ -609,39 +744,42 @@ export async function resolveRedemption(_: FormState, fd: FormData): Promise<For
 /** Adds a reward, or edits one when an id is given. */
 export async function saveReward(_: FormState, fd: FormData): Promise<FormState> {
   const admin = await requireAdmin();
+  const at = adminText(admin.lang);
   const id = Number(fd.get("id")) || null;
   const emoji = str(fd, "emoji", 8) || "🎁";
   const title = str(fd, "title", 60);
   const cost = Math.round(Number(fd.get("cost")));
   const hidden = fd.get("hidden") === "on" ? 1 : 0;
-  if (!title) return fail("What's the reward?");
-  if (!(cost >= 1 && cost <= 10000)) return fail("Cost must be between 1 and 10000 coins.");
+  if (!title) return fail(at("x.whatReward"));
+  if (!(cost >= 1 && cost <= 10000)) return fail(at("x.costRange"));
   const label = `${hidden ? "mystery " : ""}reward ${emoji} ${title} (${cost} coins)`;
   if (!id) {
     await run("INSERT INTO rewards (emoji, title, cost, hidden) VALUES (?, ?, ?, ?)", emoji, title, cost, hidden);
     await audit(admin.id, `Added ${label}`);
     refresh();
-    return ok("Added to the shop.");
+    return ok(at("x.addedShop"));
   }
   const res = await run("UPDATE rewards SET emoji = ?, title = ?, cost = ?, hidden = ? WHERE id = ? AND active = 1", emoji, title, cost, hidden, id);
-  if (!res.changes) return fail("Reward not found.");
+  if (!res.changes) return fail(at("x.rewardNotFound"));
   await audit(admin.id, `Updated ${label}`);
   refresh();
-  return ok("Saved. Requests already made keep their old price.");
+  return ok(at("x.savedPrice"));
 }
 
 export async function removeReward(_: FormState, fd: FormData): Promise<FormState> {
   const admin = await requireAdmin();
+  const at = adminText(admin.lang);
   const reward = await get<Reward>("SELECT id, emoji, title, cost, hidden FROM rewards WHERE id = ?", Number(fd.get("id")));
-  if (!reward) return fail("Reward not found.");
+  if (!reward) return fail(at("x.rewardNotFound"));
   await run("UPDATE rewards SET active = 0 WHERE id = ?", reward.id);
   await audit(admin.id, `Removed reward ${reward.emoji} ${reward.title}`);
   refresh();
-  return ok("Removed.");
+  return ok(at("x.removed"));
 }
 
 export async function addStarterRewards(): Promise<FormState> {
   const admin = await requireAdmin();
+  const at = adminText(admin.lang);
   await batch(
     ...STARTER_REWARDS.map((r) =>
       sql(
@@ -653,25 +791,26 @@ export async function addStarterRewards(): Promise<FormState> {
   );
   await audit(admin.id, "Added the starter rewards to the shop");
   refresh();
-  return ok("Starter rewards added. Edit the costs to suit your family.");
+  return ok(at("x.starterAdded"));
 }
 
 // ---------- Weekly / monthly event prizes ----------
 
 export async function saveEventPrizes(_: FormState, fd: FormData): Promise<FormState> {
   const admin = await requireAdmin();
+  const at = adminText(admin.lang);
   const kind = str(fd, "event", 5) as EventKind;
-  if (!(kind in EVENTS)) return fail("Unknown event.");
+  if (!(kind in EVENTS)) return fail(at("x.unknownEvent"));
   const places = Array.from({ length: PLACES }, (_, i) => ({
     coins: String(fd.get(`coins_${i}`) ?? "0").trim() || "0",
     prize: str(fd, `prize_${i}`, 80),
     secret: fd.get(`secret_${i}`) === "on",
   }));
   if (places.some((p) => !/^\d+$/.test(p.coins) || Number(p.coins) > MAX_COINS_PER_RULE * 10)) {
-    return fail(`Prize coins must be whole numbers from 0 to ${MAX_COINS_PER_RULE * 10}.`);
+    return fail(at("x.prizeRange", { max: MAX_COINS_PER_RULE * 10 }));
   }
   const theme = fd.get("theme");
-  if (!isThemeSetting(theme)) return fail("Pick what the event is judged on.");
+  if (!isThemeSetting(theme)) return fail(at("x.pickTheme"));
   const [current, themes] = await Promise.all([eventPrizes(), eventThemes()]);
   const next = cleanPrizes({ ...current, [kind]: places.map((p) => ({ ...p, coins: Number(p.coins) })) });
   await batch(
@@ -680,11 +819,12 @@ export async function saveEventPrizes(_: FormState, fd: FormData): Promise<FormS
   );
   await audit(admin.id, `Updated the ${EVENTS[kind].label.toLowerCase()} (theme: ${theme})`);
   refresh();
-  return ok("Prizes saved. They apply to the event that's running now.");
+  return ok(at("x.prizesSaved"));
 }
 
 export async function markPrizeDelivered(_: FormState, fd: FormData): Promise<FormState> {
   const admin = await requireAdmin();
+  const at = adminText(admin.lang);
   const kind = str(fd, "event", 5) as EventKind;
   const period = str(fd, "period", 10);
   const memberId = Number(fd.get("member_id"));
@@ -693,12 +833,12 @@ export async function markPrizeDelivered(_: FormState, fd: FormData): Promise<Fo
     "UPDATE event_results SET delivered_at = ?, delivered_by = ?, note = ? WHERE event = ? AND period = ? AND member_id = ? AND delivered_at IS NULL",
     nowStamp(), admin.id, note, kind, period, memberId,
   );
-  if (!res.changes) return fail("Already delivered.");
+  if (!res.changes) return fail(at("x.alreadyDelivered"));
   const name = (await getMember(memberId))?.name ?? "someone";
   const when = kind === "month" ? formatMonth(period) : `the week of ${formatDate(period, { day: "numeric", month: "short" })}`;
   await audit(admin.id, `🎁 Delivered ${name}'s prize for ${when}${note ? `: ${note}` : ""}`);
   refresh();
-  return ok("Marked as delivered. 🎉");
+  return ok(at("x.delivered"));
 }
 
 // ---------- Reminders (web push) ----------
@@ -750,22 +890,30 @@ const RULE_NAMES: Record<keyof GameRules, string> = {
   perfect_day: "Perfect Day",
   star_of_day: "Star of the Day",
   perfect_week: "Perfect Week",
-  badge: "other badges",
+  badge_first_step: "First Step",
+  badge_streak_3: "On Fire",
+  badge_streak_7: "Unstoppable",
+  badge_streak_30: "Legend",
+  badge_early_bird: "Early Bird",
+  badge_perfect_pill: "Perfect Pill",
+  badge_century: "Century",
+  badge_champion: "Champion",
 };
 
 export async function saveGameRules(_: FormState, fd: FormData): Promise<FormState> {
   const admin = await requireAdmin();
+  const at = adminText(admin.lang);
   const keys = Object.keys(DEFAULT_RULES) as (keyof GameRules)[];
   const invalid = keys.some((k) => {
     const v = String(fd.get(k) ?? "").trim();
     if (!/^\d+$/.test(v)) return true;
     return isWeightKey(k) ? Number(v) < 1 || Number(v) > MAX_WEIGHT : Number(v) > MAX_COINS_PER_RULE;
   });
-  if (invalid) return fail(`Weights must be 1 to ${MAX_WEIGHT}, coins 0 to ${MAX_COINS_PER_RULE} (whole numbers).`);
+  if (invalid) return fail(at("x.rulesRange", { w: MAX_WEIGHT, c: MAX_COINS_PER_RULE }));
   const next = cleanRules(Object.fromEntries(keys.map((k) => [k, fd.get(k)])));
   const before = await currentRules();
   const changes = keys.filter((k) => before[k] !== next[k]).map((k) => `${RULE_NAMES[k]} ${before[k]}→${next[k]}`);
-  if (!changes.length) return ok("Nothing changed.");
+  if (!changes.length) return ok(at("x.nothingChanged"));
   // Takes effect from today; scores and coins from earlier days stay as they are.
   await run(
     "INSERT OR REPLACE INTO game_rules (effective_date, rules, set_by) VALUES (?, ?, ?)",
@@ -773,5 +921,300 @@ export async function saveGameRules(_: FormState, fd: FormData): Promise<FormSta
   );
   await audit(admin.id, `Changed the rules: ${changes.join(", ")}`);
   refresh();
-  return ok("Saved. The new rules count from today.");
+  return ok(at("x.rulesSaved"));
+}
+
+// ---------- Fair play: reports ----------
+
+/** Tells every admin (except `skip`) about something waiting for them. */
+async function tellAdmins(skip: number[], payload: { title: string; body: string }) {
+  const admins = (await activeMembers()).filter((m) => m.is_admin && !skip.includes(m.id));
+  await Promise.all(admins.map((a) => sendToMember(a.id, { ...payload, url: "/admin#attention" }).catch(() => 0)));
+}
+
+/** "They ticked it but didn't really do it": goes to the admins, who decide. */
+export async function reportTick(_: FormState, fd: FormData): Promise<FormState> {
+  const me = await requireMember();
+  const t = translator(me.lang);
+  const taskId = Number(fd.get("task_id"));
+  const date = str(fd, "date", 10);
+  const reason = str(fd, "reason", 200);
+  const task = await get<Task>("SELECT * FROM tasks WHERE id = ?", taskId);
+  if (!task) return fail(t("report.notTicked"));
+  if (task.member_id === me.id) return fail(t("report.self"));
+  if (date > today() || date < addDays(today(), -REPORT_DAYS)) return fail(t("report.tooOld", { n: REPORT_DAYS }));
+  if (!(await get("SELECT 1 FROM checkins WHERE task_id = ? AND date = ?", taskId, date))) return fail(t("report.notTicked"));
+  const { changes } = await run(
+    "INSERT OR IGNORE INTO reports (reporter_id, member_id, task_id, date, title, reason) VALUES (?, ?, ?, ?, ?, ?)",
+    me.id, task.member_id, taskId, date, task.title, reason,
+  );
+  if (!changes) return fail(t("report.already"));
+  const member = await getMember(task.member_id);
+  await audit(me.id, `Reported ${member?.name ?? "someone"}'s tick of "${task.title}" (${date})`);
+  await tellAdmins([task.member_id], { title: "🚩 A tick was reported", body: `${me.name} says ${member?.name ?? "someone"} didn't really do "${task.title}".` });
+  refresh();
+  return ok(t("report.sent"));
+}
+
+const MAX_ADJUST = 1000;
+
+function coinsField(fd: FormData, key: string): number | null {
+  const n = Number(str(fd, key, 5) || 0);
+  return Number.isInteger(n) && n >= 0 && n <= MAX_ADJUST ? n : null;
+}
+
+/** An admin upholds a report (taking coins, giving the reporter some, maybe unticking it) or dismisses it. */
+export async function resolveReport(_: FormState, fd: FormData): Promise<FormState> {
+  const admin = await requireAdmin();
+  const at = adminText(admin.lang);
+  const decision = str(fd, "decision", 10);
+  if (decision !== "uphold" && decision !== "dismiss") return fail(at("x.unknown"));
+  const r = await get<Report>(
+    "SELECT r.*, a.name AS reporter_name, b.name AS member_name FROM reports r JOIN members a ON a.id = r.reporter_id JOIN members b ON b.id = r.member_id WHERE r.id = ? AND r.status = 'open'",
+    Number(fd.get("id")),
+  );
+  if (!r) return fail(at("x.handled"));
+  if ((r.member_id === admin.id || r.reporter_id === admin.id) && (await otherActiveAdmins(admin.id)) > 0) {
+    return fail(at("x.otherDecide"));
+  }
+
+  if (decision === "dismiss") {
+    await run("UPDATE reports SET status = 'dismissed', resolved_at = ?, resolved_by = ? WHERE id = ?", nowStamp(), admin.id, r.id);
+    await audit(admin.id, `Dismissed ${r.reporter_name}'s report about ${r.member_name}'s "${r.title}"`);
+    refresh();
+    return ok(at("x.dismissed"));
+  }
+
+  const penalty = coinsField(fd, "penalty");
+  const reward = coinsField(fd, "reward");
+  if (penalty === null || reward === null) return fail(at("x.adjustRange", { max: MAX_ADJUST }));
+  const untick = fd.get("untick") === "on";
+  const date = today();
+  await batch(
+    sql("UPDATE reports SET status = 'upheld', penalty = ?, reward = ?, resolved_at = ?, resolved_by = ? WHERE id = ?", penalty, reward, nowStamp(), admin.id, r.id),
+    ...(penalty
+      ? [sql("INSERT INTO coin_adjustments (member_id, amount, reason, date, created_by) VALUES (?, ?, ?, ?, ?)", r.member_id, -penalty, `Report upheld: "${r.title}" (${r.date})`, date, admin.id)]
+      : []),
+    ...(reward
+      ? [sql("INSERT INTO coin_adjustments (member_id, amount, reason, date, created_by) VALUES (?, ?, ?, ?, ?)", r.reporter_id, reward, `Fair-play report about ${r.member_name}'s "${r.title}"`, date, admin.id)]
+      : []),
+    ...(untick ? [sql("DELETE FROM checkins WHERE task_id = ? AND date = ?", r.task_id, r.date)] : []),
+  );
+  await audit(
+    admin.id,
+    `Upheld ${r.reporter_name}'s report about ${r.member_name}'s "${r.title}": ${[untick && "unticked", penalty && `−${penalty} coins`, reward && `+${reward} to ${r.reporter_name}`].filter(Boolean).join(", ") || "no coin change"}`,
+  );
+  const member = await getMember(r.member_id);
+  const mt = translator(member?.lang);
+  await sendToMember(r.member_id, {
+    title: mt("push.reportTitle"),
+    body: mt("push.reportBody", { title: r.title, coins: penalty }),
+    url: "/shop",
+  }).catch(() => 0);
+  if (reward) {
+    const reporter = await getMember(r.reporter_id);
+    await sendToMember(r.reporter_id, { title: translator(reporter?.lang)("push.thanksTitle"), body: translator(reporter?.lang)("push.coinsAdded", { n: reward }), url: "/shop" }).catch(() => 0);
+  }
+  refresh();
+  return ok(
+    at("x.reportDone", {
+      what:
+        [untick && at("x.unticked"), penalty && at("x.minusFor", { n: penalty, name: r.member_name }), reward && at("x.plusFor", { n: reward, name: r.reporter_name })]
+          .filter(Boolean)
+          .join(", ") || at("x.upheld"),
+    }),
+  );
+}
+
+// ---------- Helping each other ----------
+
+/** "I helped Mom with her walk": asks the admins for a coin award. */
+export async function askHelpAward(_: FormState, fd: FormData): Promise<FormState> {
+  const me = await requireMember();
+  const t = translator(me.lang);
+  const helpedId = Number(fd.get("helped_id"));
+  const note = str(fd, "note", 200);
+  if (helpedId === me.id) return fail(t("help.self"));
+  const helped = await getMember(helpedId);
+  if (!helped?.active) return fail(t("help.self"));
+  if (note.length < 3) return fail(t("help.needNote"));
+  const open = (await get<{ n: number }>("SELECT COUNT(*) AS n FROM help_requests WHERE member_id = ? AND status = 'open'", me.id))!.n;
+  if (open >= 5) return fail(t("help.tooMany"));
+  await run("INSERT INTO help_requests (member_id, helped_id, note) VALUES (?, ?, ?)", me.id, helpedId, note);
+  await audit(me.id, `Asked for a help award: helped ${helped.name} (${note})`);
+  await tellAdmins([me.id], { title: "🤝 Help award request", body: `${me.name} helped ${helped.name}: ${note}` });
+  refresh();
+  return ok(t("help.sent"));
+}
+
+export async function resolveHelp(_: FormState, fd: FormData): Promise<FormState> {
+  const admin = await requireAdmin();
+  const at = adminText(admin.lang);
+  const decision = str(fd, "decision", 10);
+  if (decision !== "approve" && decision !== "decline") return fail(at("x.unknown"));
+  const h = await get<HelpRequest>(
+    "SELECT h.*, a.name AS member_name, b.name AS helped_name FROM help_requests h JOIN members a ON a.id = h.member_id JOIN members b ON b.id = h.helped_id WHERE h.id = ? AND h.status = 'open'",
+    Number(fd.get("id")),
+  );
+  if (!h) return fail(at("x.handled"));
+  if (h.member_id === admin.id && (await otherActiveAdmins(admin.id)) > 0) return fail(at("x.otherApprove"));
+  if (decision === "decline") {
+    await run("UPDATE help_requests SET status = 'declined', resolved_at = ?, resolved_by = ? WHERE id = ?", nowStamp(), admin.id, h.id);
+    await audit(admin.id, `Declined ${h.member_name}'s help award (helped ${h.helped_name})`);
+    refresh();
+    return ok(at("x.declined"));
+  }
+  const coins = coinsField(fd, "coins");
+  if (!coins) return fail(at("x.helpRange", { max: MAX_ADJUST }));
+  await batch(
+    sql("UPDATE help_requests SET status = 'approved', coins = ?, resolved_at = ?, resolved_by = ? WHERE id = ?", coins, nowStamp(), admin.id, h.id),
+    sql("INSERT INTO coin_adjustments (member_id, amount, reason, date, created_by) VALUES (?, ?, ?, ?, ?)", h.member_id, coins, `Helped ${h.helped_name}: ${h.note}`, today(), admin.id),
+  );
+  await audit(admin.id, `Gave ${h.member_name} ${coins} coins for helping ${h.helped_name}`);
+  const helper = await getMember(h.member_id);
+  const ht = translator(helper?.lang);
+  await sendToMember(h.member_id, { title: ht("push.helpTitle"), body: ht("push.coinsAdded", { n: coins }), url: "/shop" }).catch(() => 0);
+  refresh();
+  return ok(at("x.gave", { name: h.member_name, n: coins }));
+}
+
+// ---------- Tracking start & resets ----------
+
+/** The day tracking starts: days before it don't count for scores, coins, streaks or badges. */
+export async function setTrackingStart(_: FormState, fd: FormData): Promise<FormState> {
+  const admin = await requireAdmin();
+  const at = adminText(admin.lang);
+  const date = str(fd, "date", 10);
+  if (fd.get("clear") === "1") {
+    await run("DELETE FROM settings WHERE key = 'tracking_start'");
+    await audit(admin.id, "Counted everything again (no tracking start date)");
+    refresh();
+    return ok(at("x.countAll"));
+  }
+  if (!isDate(date)) return fail(at("x.pickDate"));
+  if (date > addDays(today(), 366)) return fail(at("x.dateYear"));
+  await run("INSERT OR REPLACE INTO settings (key, value) VALUES ('tracking_start', ?)", date);
+  await audit(admin.id, `Set tracking to start on ${date}`);
+  refresh();
+  return ok(at("x.trackingSet", { date: formatDate(date, { weekday: "short", day: "numeric", month: "short", year: "numeric" }, admin.lang) }));
+}
+
+/** On a server with a database file, keeps a copy before anything is wiped (Cloudflare D1 has its own Time Travel). */
+async function backupBeforeReset(label: string): Promise<string | null> {
+  if (onCloudflare()) return null;
+  const fs = process.getBuiltinModule("node:fs") as typeof import("node:fs");
+  const path = process.getBuiltinModule("node:path") as typeof import("node:path");
+  const dir = path.join(path.dirname(dbPath()), "backups");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `before-${label}-${new Date().toISOString().replace(/[:.]/g, "-")}.db`);
+  await run(`VACUUM INTO '${file.replaceAll("'", "''")}'`);
+  return file;
+}
+
+const backedUp = (file: string | null, at: AT) => (file ? ` ${at("x.backup", { file: file.split(/[\\/]/).slice(-2).join("/") })}` : "");
+
+/** Wipes one person's progress (ticks, coins, prizes, breaks, reports); their routine and profile stay. */
+export async function resetMember(_: FormState, fd: FormData): Promise<FormState> {
+  const admin = await requireAdmin();
+  const at = adminText(admin.lang);
+  const member = await getMember(Number(fd.get("id")));
+  if (!member?.active) return fail(at("x.pickOne"));
+  if (str(fd, "confirm", 40).toLowerCase() !== member.name.toLowerCase()) return fail(at("x.typeName", { name: member.name }));
+  const file = await backupBeforeReset(`reset-${member.name.replace(/\W+/g, "") || member.id}`);
+  const id = member.id;
+  await batch(
+    sql("DELETE FROM checkins WHERE member_id = ?", id),
+    sql("DELETE FROM reminders_sent WHERE task_id IN (SELECT id FROM tasks WHERE member_id = ?)", id),
+    sql("DELETE FROM redemptions WHERE member_id = ?", id),
+    sql("DELETE FROM event_results WHERE member_id = ?", id),
+    sql("DELETE FROM coin_adjustments WHERE member_id = ?", id),
+    sql("DELETE FROM reports WHERE member_id = ? OR reporter_id = ?", id, id),
+    sql("DELETE FROM help_requests WHERE member_id = ? OR helped_id = ?", id, id),
+    sql("DELETE FROM away_periods WHERE member_id = ?", id),
+    sql("UPDATE members SET tracking_start = ? WHERE id = ?", today(), id),
+  );
+  await audit(admin.id, `Reset ${member.name}'s progress`);
+  refresh();
+  return ok(at("x.resetOneDone", { name: member.name }) + backedUp(file, at));
+}
+
+/** Wipes everyone's progress; members, routines, rewards and rules stay. Tracking restarts today. */
+export async function resetProgress(_: FormState, fd: FormData): Promise<FormState> {
+  const admin = await requireAdmin();
+  const at = adminText(admin.lang);
+  if (str(fd, "confirm", 20) !== "RESET") return fail(at("x.typeReset"));
+  const file = await backupBeforeReset("reset-all");
+  const date = today();
+  await batch(
+    sql("DELETE FROM checkins"),
+    sql("DELETE FROM reminders_sent"),
+    sql("DELETE FROM redemptions"),
+    sql("DELETE FROM event_results"),
+    sql("DELETE FROM event_periods"),
+    sql("DELETE FROM coin_adjustments"),
+    sql("DELETE FROM reports"),
+    sql("DELETE FROM help_requests"),
+    sql("DELETE FROM away_periods"),
+    sql("UPDATE members SET tracking_start = NULL"),
+    sql("INSERT OR REPLACE INTO settings (key, value) VALUES ('tracking_start', ?)", date),
+    sql("INSERT OR REPLACE INTO settings (key, value) VALUES ('weekly_events_from', ?)", startOfWeek(date)),
+  );
+  await audit(admin.id, "Reset everyone's progress");
+  refresh();
+  return ok(at("x.resetAllDone") + backedUp(file, at));
+}
+
+/** Deletes everything and goes back to the first-run setup. */
+export async function factoryReset(_: FormState, fd: FormData): Promise<FormState> {
+  const admin = await requireAdmin();
+  const at = adminText(admin.lang);
+  const family = (await get<{ value: string }>("SELECT value FROM settings WHERE key = 'family_name'"))?.value ?? "";
+  const typed = str(fd, "confirm", 80);
+  if (!family || typed.toLowerCase() !== family.toLowerCase()) return fail(at("x.typeFamily", { family }));
+  await backupBeforeReset("factory-reset");
+  const members = await all<{ id: number }>("SELECT id FROM members");
+  for (const m of members) await removePhoto(m.id).catch(() => {});
+  await batch(
+    ...[
+      "checkins", "reminders_sent", "reports", "help_requests", "coin_adjustments", "redemptions", "event_results", "event_periods",
+      "away_periods", "push_subscriptions", "login_attempts", "tasks", "rewards", "game_rules", "audit_log", "members",
+    ].map((table) => sql(`DELETE FROM ${table}`)),
+    // Keep the secrets (sign-in cookies and push keys), forget everything else.
+    sql("DELETE FROM settings WHERE key NOT IN ('session_secret', 'vapid_keys')"),
+  );
+  await endSession();
+  refresh();
+  redirect("/");
+}
+
+// ---------- Gift coins ----------
+
+/** An admin gives coins to one or more people, with a reason they'll see in their coin history. */
+export async function giftCoins(_: FormState, fd: FormData): Promise<FormState> {
+  const admin = await requireAdmin();
+  const at = adminText(admin.lang);
+  const ids = [...new Set(fd.getAll("member_ids").map(Number))];
+  const amount = Math.round(Number(fd.get("amount")));
+  const reason = str(fd, "reason", 120);
+  if (!ids.length) return fail(at("x.pickGift"));
+  if (!(amount >= 1 && amount <= MAX_ADJUST)) return fail(at("x.giftRange", { max: MAX_ADJUST }));
+  if (reason.length < 3) return fail(at("x.giftReason"));
+  const members = (await activeMembers()).filter((m) => ids.includes(m.id));
+  if (members.length !== ids.length) return fail(at("x.memberNotFound"));
+  const date = today();
+  await batch(
+    ...members.map((m) =>
+      sql("INSERT INTO coin_adjustments (member_id, amount, reason, date, created_by) VALUES (?, ?, ?, ?, ?)", m.id, amount, `🎁 ${reason}`, date, admin.id),
+    ),
+  );
+  const names = nameList(members.map((m) => m.name), at("bk.and"));
+  await audit(admin.id, `Gave ${amount} coins to ${nameList(members.map((m) => m.name))}: ${reason}`);
+  await Promise.all(
+    members.map((m) => {
+      const mt = translator(m.lang);
+      return sendToMember(m.id, { title: mt("push.giftTitle", { n: amount }), body: reason, url: "/shop" }).catch(() => 0);
+    }),
+  );
+  refresh();
+  return ok(at("x.gaveMany", { n: amount, names }));
 }

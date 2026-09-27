@@ -1,14 +1,15 @@
 import Link from "next/link";
 import { requireMember } from "@/lib/auth";
-import { ANY_TIME_REMINDER, BREAK_REASONS, ON_TIME_GRACE_MIN, breakOn, quotaOf, tasksForDay, type TodayItem } from "@/lib/data";
+import { BREAK_REASONS, breakOn, countsFrom, quotaOf, tasksForDay, trackingStart, type TodayItem } from "@/lib/data";
 import { BADGES, STREAK_MIN, achievementsFor, eventNow, eventResults, eventStandings, finalizeEvents, standings, weekRecap } from "@/lib/stats";
-import { addDays, formatDate, formatMonth, formatTime, minutes, nowHHMM, startOfMonth, startOfWeek, today, weekday } from "@/lib/dates";
-import { LATE_TICK_UNTIL, inLateWindow } from "@/lib/tick-window";
+import { addDays, formatDate, formatMonth, minutes, nowHHMM, startOfMonth, startOfWeek, today, weekday } from "@/lib/dates";
+import { inLateWindow } from "@/lib/tick-window";
 import { BADGE_TEXT, translator, type Key, type T } from "@/lib/i18n";
 import { endBreak } from "@/app/actions";
 import ActionForm, { SubmitButton } from "@/components/ActionForm";
 import ProgressRing from "@/components/ProgressRing";
 import TaskRow, { type RowStatus } from "./TaskRow";
+import { rowProps, statusOf } from "./rows";
 import Coin from "@/components/Coin";
 import DayCelebration from "@/components/DayCelebration";
 import EmptyState from "@/components/EmptyState";
@@ -29,40 +30,14 @@ function greeting(now: number, t: T) {
   return t("greet.evening");
 }
 
-function statusOf(item: TodayItem, now: number, t: T): RowStatus {
-  if (item.checkin) {
-    return item.checkin.on_time
-      ? { tone: "done", text: t("status.doneAt", { time: formatTime(item.checkin.done_at) }) }
-      : { tone: "late", text: t("status.doneLate", { time: formatTime(item.checkin.done_at) }) };
-  }
-  if (item.per_week || item.per_month) return { tone: "upcoming", text: "" };
-  if (item.any_time) return now >= minutes(ANY_TIME_REMINDER) ? { tone: "due", text: t("status.stillToDo") } : { tone: "upcoming", text: "" };
-  if (now > minutes(item.time) + ON_TIME_GRACE_MIN) return { tone: "overdue", text: t("status.missed") };
-  if (now >= minutes(item.time) - 30) return { tone: "due", text: t("status.due") };
-  return { tone: "upcoming", text: formatTime(item.time) };
-}
-
-/** Everything a task row needs, for today's list or yesterday's. */
-function rowProps(it: TodayItem, date: string, memberId: number, status: RowStatus, t: T) {
-  return {
-    id: it.id,
-    memberId,
-    date,
-    kind: it.kind,
-    title: it.title,
-    details: it.details,
-    time: it.any_time ? t("task.anyTime") : formatTime(it.time),
-    done: !!it.checkin,
-    status,
-    note: it.per_week
-      ? t("task.weekProgress", { done: it.quotaDone, target: it.quotaTarget })
-      : it.per_month
-        ? t("task.monthProgress", { done: it.quotaDone, target: it.quotaTarget })
-        : undefined,
-    customEmoji: it.custom_emoji,
-    coins: it.coins,
-    penaltyText: it.penalty ? t("task.penalty", { n: it.penalty }) : undefined,
-  };
+/** A small round icon button (Yesterday, Calendar, Chart); a dot means something needs you. */
+function IconLink({ href, label, dot, children }: { href: string; label: string; dot?: boolean; children: React.ReactNode }) {
+  return (
+    <Link href={href} aria-label={label} title={label} className="relative grid h-8 w-8 place-items-center rounded-full bg-white text-base shadow-sm">
+      {children}
+      {dot && <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-brand ring-2 ring-cream" />}
+    </Link>
+  );
 }
 
 /** The most urgent open item: the earliest timed one (missed ones first), then any-time, then weekly. */
@@ -90,7 +65,7 @@ export default async function TodayPage() {
   // Sunday: this week so far. Monday: last week, now that it's over.
   const dow = weekday(date);
   const recapWeek = dow === 0 ? startOfWeek(date) : dow === 1 ? addDays(startOfWeek(date), -7) : null;
-  const [items, onBreak, board, weekBoard, ach, results, yItems, yBreak, recap] = await Promise.all([
+  const [items, onBreak, board, weekBoard, ach, results, yItems, yBreak, recap, familyStart] = await Promise.all([
     tasksForDay(me.id, date),
     breakOn(me.id, date),
     standings(date, date),
@@ -100,9 +75,16 @@ export default async function TodayPage() {
     lateWindow ? tasksForDay(me.id, yesterday) : Promise.resolve([] as TodayItem[]),
     lateWindow ? breakOn(me.id, yesterday) : Promise.resolve(undefined),
     recapWeek ? weekRecap(me.id, recapWeek, dow === 0 ? date : addDays(recapWeek, 6)) : Promise.resolve(null),
+    trackingStart(),
   ]);
+  // Before tracking starts (an admin chose a later day), ticks are just practice.
+  const startsOn = countsFrom(me, familyStart);
   const doneCount = items.filter((i) => i.checkin).length;
-  const allDone = items.length > 0 && doneCount === items.length;
+  // On the last day of a week/month, "N times" items may still be short: those sessions count as
+  // missed today, so the day isn't "all done" (and can't reach 100%) even with every row ticked.
+  const short = items.filter((i) => i.shortfall > 0);
+  const allTicked = items.length > 0 && doneCount === items.length;
+  const allDone = allTicked && !short.length;
   const mine = board.find((s) => s.member.id === me.id);
   // Weighted score when there is one (important items count more), else a plain count.
   const percent = Math.round(mine?.score ?? (items.length ? (doneCount / items.length) * 100 : 0));
@@ -114,10 +96,9 @@ export default async function TodayPage() {
   const myWins = results.filter(
     (r) => r.member_id === me.id && ((r.event === "week" && r.period === lastWeek) || (r.event === "month" && r.period === lastMonth)),
   );
-  // Before 10 AM, yesterday's unticked items can still be ticked. (Weekly-target items can
-  // simply be done today instead, so they aren't listed.)
-  const yFixed = yItems.filter((i) => !quotaOf(i));
-  const missedYesterday = !yBreak && yFixed.some((i) => !i.checkin) ? yFixed : [];
+  // Before 10 AM, yesterday's unticked items can still be ticked on the Yesterday page;
+  // its icon gets a dot then. (Weekly-target items can simply be done today instead.)
+  const yesterdayOpen = yesterday >= startsOn && !yBreak && yItems.some((i) => !quotaOf(i) && !i.checkin);
 
   // Focus: the next thing to do, then the rest still open; finished items fold away.
   const upNext = pickUpNext(items);
@@ -140,8 +121,27 @@ export default async function TodayPage() {
     <div className="space-y-4">
       <DayCelebration done={allDone && !onBreak} date={date} memberId={me.id} />
 
+      {startsOn > date && (
+        <p className="rounded-2xl bg-sky-50 px-4 py-3 text-sm font-bold text-sky-900">
+          🗓️ {t("track.notYet", { date: formatDate(startsOn, { weekday: "long", day: "numeric", month: "long" }, me.lang) })}
+        </p>
+      )}
+
       <section>
-        <p className="text-sm font-bold text-muted">{formatDate(date, undefined, me.lang)}</p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="min-w-0 truncate text-sm font-bold text-muted">{formatDate(date, undefined, me.lang)}</p>
+          <span className="flex shrink-0 gap-1.5">
+            <IconLink href="/yesterday" label={t("hist.yesterday")} dot={yesterdayOpen}>
+              🕙
+            </IconLink>
+            <IconLink href="/history" label={t("hist.calendar")}>
+              📅
+            </IconLink>
+            <IconLink href="/history?view=chart" label={t("hist.chart")}>
+              📊
+            </IconLink>
+          </span>
+        </div>
         <h1 className="text-2xl font-black">{t("today.greeting", { greeting: greeting(now, t), name: me.name })}</h1>
         <div className="mt-2 flex flex-wrap gap-2 text-sm font-extrabold">
           <span className="rounded-full bg-white px-3 py-1 shadow-sm" title={t("today.streakHint", { min: STREAK_MIN })}>
@@ -180,20 +180,6 @@ export default async function TodayPage() {
         </Link>
       )}
 
-      {missedYesterday.length > 0 && (
-        <section className="card border-2 border-orange-200">
-          <h2 className="text-lg font-black">🕙 {t("yday.title")}</h2>
-          <p className="mb-3 text-sm text-muted">{t("yday.sub", { time: formatTime(LATE_TICK_UNTIL) })}</p>
-          <ul className="space-y-2.5">
-            {missedYesterday.map((it) => (
-              <li key={it.id}>
-                <TaskRow {...row(it, yesterday, it.checkin ? statusOf(it, now, t) : { tone: "overdue", text: t("status.yesterday") })} />
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
       {onBreak ? (
         <section className="card text-center">
           <p className="text-5xl">{BREAK_REASONS[onBreak.reason].emoji}</p>
@@ -230,7 +216,9 @@ export default async function TodayPage() {
                 <>
                   <p className="text-lg font-black">{t("today.progress", { done: doneCount, total: items.length })}</p>
                   <p className="text-sm text-muted">
-                    {t("today.toGo", { n: items.length - doneCount })} {t(doneCount === 0 ? "today.start" : "today.keepGoing")}
+                    {allTicked
+                      ? t("today.allTickedShort")
+                      : `${t("today.toGo", { n: items.length - doneCount })} ${t(doneCount === 0 ? "today.start" : "today.keepGoing")}`}
                   </p>
                 </>
               )}
@@ -241,6 +229,21 @@ export default async function TodayPage() {
               </Link>
             )}
           </div>
+          {short.length > 0 && (
+            <ul className="space-y-1 rounded-2xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-900">
+              {short.map((it) => (
+                <li key={it.id}>
+                  ⚠️{" "}
+                  {t(it.per_week ? "today.shortWeek" : "today.shortMonth", {
+                    title: it.title,
+                    done: it.quotaTarget - it.shortfall,
+                    target: it.quotaTarget,
+                    n: it.shortfall,
+                  })}
+                </li>
+              ))}
+            </ul>
+          )}
           {upNext && (
             <div>
               <p className="mb-2 px-1 text-xs font-extrabold uppercase tracking-wider text-brand-dark">{t("today.upNext")}</p>

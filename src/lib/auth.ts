@@ -1,6 +1,6 @@
 import "server-only";
 import { cache } from "react";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { get, run } from "./db";
 import { getMember, type Member } from "./data";
@@ -30,8 +30,9 @@ export async function startSession(memberId: number) {
   (await cookies()).set(COOKIE, `${payload}.${b64url(await sign(payload))}`, {
     httpOnly: true,
     sameSite: "lax",
-    // Off by default so the app works over plain http on the home network.
-    secure: process.env.COOKIE_SECURE === "true",
+    // Secure whenever the site is reached over https (directly, or through nginx / a tunnel that
+    // says so), or when COOKIE_SECURE=true. Plain http on the home network still works.
+    secure: process.env.COOKIE_SECURE === "true" || (await headers()).get("x-forwarded-proto") === "https",
     maxAge: MAX_AGE_DAYS * 86400,
     path: "/",
   });

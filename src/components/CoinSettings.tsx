@@ -4,6 +4,8 @@ import { useState } from "react";
 import { KINDS } from "@/lib/kinds";
 import { COIN_BONUSES, COIN_KEYS, COIN_PRESETS, MAX_COINS_PER_RULE, coinKey, matchPreset, type GameRules } from "@/lib/game";
 import Coin from "./Coin";
+import { BADGE_TEXT, type Lang } from "@/lib/i18n";
+import { adminText, type AKey } from "@/lib/i18n-admin";
 
 const head = "mb-2 px-1 text-xs font-extrabold uppercase tracking-wider text-muted";
 const card =
@@ -32,7 +34,8 @@ function CoinInput({ name, value, label }: { name: keyof GameRules; value: numbe
 }
 
 /** Coin amounts: pick Normal / Generous / Strict, or Custom to set every number. */
-export default function CoinSettings({ rules }: { rules: GameRules }) {
+export default function CoinSettings({ rules, lang = "en" }: { rules: GameRules; lang?: Lang }) {
+  const a = adminText(lang);
   const [mode, setMode] = useState(matchPreset(rules));
   // What Custom starts from: the current amounts, or the preset picked just before.
   const [base, setBase] = useState<GameRules>(rules);
@@ -45,20 +48,20 @@ export default function CoinSettings({ rules }: { rules: GameRules }) {
 
   return (
     <div>
-      <p className={head}>Coins</p>
+      <p className={head}>{a("cs.coins")}</p>
       <div className="grid grid-cols-4 gap-2">
-        {[...COIN_PRESETS, { id: "custom" as const, emoji: "🎛️", label: "Custom", how: "" }].map((p) => (
+        {[...COIN_PRESETS, { id: "custom" as const, emoji: "🎛️" }].map((p) => (
           <label key={p.id} className={card}>
             <input type="radio" checked={mode === p.id} onChange={() => choose(p.id)} className="sr-only" />
             <span className="text-xl">{p.emoji}</span>
-            {p.label}
+            {a(`cs.${p.id}` as AKey)}
           </label>
         ))}
       </div>
 
       {preset ? (
         <>
-          <p className="mt-2 rounded-xl bg-stone-50 px-3 py-2 text-xs font-semibold text-muted">{preset.how}</p>
+          <p className="mt-2 rounded-xl bg-stone-50 px-3 py-2 text-xs font-semibold text-muted">{a(`cs.${preset.id}How` as AKey)}</p>
           {COIN_KEYS.map((k) => (
             <input key={k} type="hidden" name={k} value={preset.coins[k] ?? rules[k]} />
           ))}
@@ -67,31 +70,32 @@ export default function CoinSettings({ rules }: { rules: GameRules }) {
         <div className="mt-4 space-y-5">
           <div>
             <div className={`${head} grid grid-cols-[1fr_5rem_5rem] gap-2`}>
-              <span>Per task</span>
-              <span className="text-center">On time</span>
-              <span className="text-center">Late</span>
+              <span>{a("cs.perTask")}</span>
+              <span className="text-center">{a("cs.onTime")}</span>
+              <span className="text-center">{a("cs.late")}</span>
             </div>
             <div className="space-y-2">
               {KINDS.map((k) => (
                 <div key={k.value} className="grid grid-cols-[1fr_5rem_5rem] items-center gap-2">
                   <span className="font-bold">
-                    {k.emoji} {k.label}
+                    {k.emoji} {a(`ty.${k.value}`)}
                   </span>
-                  <CoinInput name={coinKey(k.value, true)} value={base[coinKey(k.value, true)]} label={`${k.label} on time`} />
-                  <CoinInput name={coinKey(k.value, false)} value={base[coinKey(k.value, false)]} label={`${k.label} late`} />
+                  <CoinInput name={coinKey(k.value, true)} value={base[coinKey(k.value, true)]} label={`${a(`ty.${k.value}`)}: ${a("cs.onTime")}`} />
+                  <CoinInput name={coinKey(k.value, false)} value={base[coinKey(k.value, false)]} label={`${a(`ty.${k.value}`)}: ${a("cs.late")}`} />
                 </div>
               ))}
             </div>
           </div>
           <div>
-            <p className={head}>Bonuses</p>
+            <p className={head}>{a("cs.badges")}</p>
             <div className="space-y-2">
               {COIN_BONUSES.map((b) => (
                 <div key={b.key} className="grid grid-cols-[1fr_5rem] items-center gap-2">
-                  <span className="text-sm font-bold">
-                    {b.emoji} {b.label}
+                  <span className="min-w-0 text-sm font-bold">
+                    {b.emoji} {BADGE_TEXT[lang][b.badge].name}
+                    <span className="block truncate text-[11px] font-semibold text-muted">{BADGE_TEXT[lang][b.badge].how}</span>
                   </span>
-                  <CoinInput name={b.key} value={base[b.key]} label={b.label} />
+                  <CoinInput name={b.key} value={base[b.key]} label={BADGE_TEXT[lang][b.badge].name} />
                 </div>
               ))}
             </div>
