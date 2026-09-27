@@ -5,22 +5,41 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "start": "next start -H 0.0.0.0",
+    "lint": "eslint",
+    "dev:demo": "DB_PATH=data/demo.db next dev",
+    "seed:demo": "node scripts/seed-demo.mts",
+    "typecheck": "tsc --noEmit",
+    "start:public": "COOKIE_SECURE=true next start -H 127.0.0.1 -p 3000",
+    "backup": "node scripts/backup.mjs",
+    "cf:build": "opennextjs-cloudflare build",
+    "cf:preview": "opennextjs-cloudflare build && wrangler dev",
+    "cf:deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "cf:migrate:local": "wrangler d1 migrations apply family-fit --local",
+    "cf:migrate": "wrangler d1 migrations apply family-fit --remote",
+    "cf:export": "node scripts/export-d1.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
+    "@opennextjs/cloudflare": "^1.20.6",
     "next": "16.3.6",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^26.6.3",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "esbuild": "^0.28.1",
     "eslint": "^9",
     "eslint-config-next": "16.3.6",
+    "http_ece": "^1.2.1",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^5.0.2",
+    "wrangler": "^4.141.0"
   }
 }
