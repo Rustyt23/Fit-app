@@ -49,10 +49,12 @@ type Props = {
   hero?: boolean;
   /** Large-text mode: just the name, the time and a big tick circle. */
   simple?: boolean;
+  /** Minimal one-line row (Today): name, time and the tick, nothing else. */
+  compact?: boolean;
 };
 
 export default function TaskRow(props: Props) {
-  const { id, memberId, date, kind, customEmoji, title, details, time, done, status, note, coins, penaltyText, hero, simple } = props;
+  const { id, memberId, date, kind, customEmoji, title, details, time, done, status, note, coins, penaltyText, hero, simple, compact } = props;
   const [optimisticDone, setOptimisticDone] = useOptimistic(done);
   const [pending, startTransition] = useTransition();
   // A tick made offline shows straight away and is sent later (see OfflineSync).
@@ -141,10 +143,34 @@ export default function TaskRow(props: Props) {
         disabled={pending}
         aria-pressed={shown}
         style={{ transform: dx ? `translateX(${dx}px)` : undefined, touchAction: "pan-y" }}
-        className={`card relative flex w-full items-center gap-3 overflow-hidden text-left ${dx ? "" : "transition"} active:scale-[0.99] ${
-          hero ? "py-5 pl-6" : "py-3.5 pl-5"
-        } ${shown ? "opacity-75" : ""}`}
+        className={`card relative flex w-full items-center overflow-hidden text-left ${dx ? "" : "transition"} active:scale-[0.99] ${
+          compact ? `gap-3 rounded-2xl ${simple ? "py-2.5" : "py-2"} pl-4 pr-3` : hero ? "gap-3 py-5 pl-6" : "gap-3 py-3.5 pl-5"
+        } ${shown ? "opacity-60" : ""}`}
       >
+        {compact ? (
+          <>
+            <span className={`absolute inset-y-0 left-0 w-1 ${style.bar}`} />
+            <span className={`grid shrink-0 place-items-center rounded-xl ${style.chip} ${simple ? "h-11 w-11 text-2xl" : "h-9 w-9 text-xl"}`}>{emoji}</span>
+            <span className="min-w-0 flex-1">
+              <span className={`block truncate font-extrabold leading-tight ${simple ? "text-lg" : "text-[15px]"} ${shown ? "line-through decoration-2" : ""}`}>
+                {title}
+              </span>
+              <span className={`block truncate text-xs font-semibold ${shown ? TONE[status.tone] : status.tone === "overdue" || status.tone === "due" ? "text-brand-dark" : "text-muted"}`}>
+                {shown && done && !queued ? status.text : time}
+                {note && !shown && ` · ${note}`}
+              </span>
+            </span>
+            <span
+              className={`relative grid shrink-0 place-items-center rounded-full border-2 font-black transition ${simple ? "h-11 w-11 text-xl" : "h-9 w-9 text-base"} ${
+                shown ? "animate-pop border-emerald-500 bg-emerald-500 text-white" : status.tone === "overdue" || status.tone === "due" ? "border-brand text-transparent" : "border-line text-transparent"
+              }`}
+              aria-hidden
+            >
+              ✓{queued && <span className="absolute -right-1.5 -top-1.5 text-sm">⏳</span>}
+            </span>
+          </>
+        ) : (
+          <>
         <span className={`absolute inset-y-0 left-0 ${hero ? "w-2" : "w-1.5"} ${style.bar}`} />
         <span className={`grid shrink-0 place-items-center rounded-2xl ${style.chip} ${hero ? "h-14 w-14 text-3xl" : "h-11 w-11 text-2xl"}`}>
           {emoji}
@@ -181,6 +207,8 @@ export default function TaskRow(props: Props) {
         >
           ✓{queued && <span className="absolute -right-1.5 -top-1.5 text-sm">⏳</span>}
         </span>
+          </>
+        )}
       </button>
     </div>
   );

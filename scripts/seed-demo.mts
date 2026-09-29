@@ -1,6 +1,6 @@
 // Creates data/demo.db with a sample family, six weeks of history (so last month has gift winners),
 // a sick break and a stocked coin shop,
-// so you can try the app without touching your real data (data/family.db).
+// so you can try the app without touching your real data (data/singh_family_database.db).
 //
 //   npm run seed:demo   then   npm run dev:demo
 //

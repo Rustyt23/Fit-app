@@ -42,9 +42,9 @@ A small web app for the family to follow their **exercise, supplement and medici
 
 ### Simple by design
 
-- **Today shows what matters now:** an **Up next** card with the most urgent item, the rest below, and finished items folded into "N done today". The weekly challenge and the family's progress share one compact card.
+- **Today is minimal and fits on one screen:** a one-line header (date, progress ring and the 🕙 📅 📊 icons) and the day's items as compact rows with their tick: open items first in the order they're due, ticked ones at the bottom. Greetings, badges, wins, recaps and the family strip live on their own tabs (Me, Ranking, Family) instead.
 - **Swipe right to tick** (or tap), with a small buzz on phones. **Confetti** when the whole day is done, once a day.
-- **Weekly recap** on Sundays (week so far) and Mondays (last week): score vs the week before, tasks done, perfect days, best day, coins, weekly-challenge place, new badges. Also under **Me → My week**.
+- **Weekly recap** under **Me → My week**: score vs the week before, tasks done, perfect days, best day, coins, weekly-challenge place, new badges. 
 - **Large text** also simplifies Today: just the name, the time and a big tick circle.
 - **Folding sections** everywhere (Admin, member pages, Me), each with a one-line summary while closed.
   - **Me** shows just My week, Badges and **Settings & more** (break, reminders, language, photo, PIN, home screen).

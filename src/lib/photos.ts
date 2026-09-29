@@ -3,7 +3,7 @@ import { get, onCloudflare, run } from "./db";
 
 // Profile photos. On Cloudflare they live in the R2 bucket bound as PHOTOS (see
 // wrangler.jsonc). On your own computer, or if no bucket is bound, they stay in
-// the database's photo column, so data/family.db remains a complete backup.
+// the database's photo column, so the database file remains a complete backup.
 
 type R2Object = { arrayBuffer(): Promise<ArrayBuffer> };
 type R2Bucket = {
